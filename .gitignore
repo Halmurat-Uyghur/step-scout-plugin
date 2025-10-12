@@ -1,0 +1,10 @@
+# Gradle
+.gradle/
+build/
+
+# IDE files
+.idea/
+*.iml
+out/
+*.zip
+/.intellijPlatform/

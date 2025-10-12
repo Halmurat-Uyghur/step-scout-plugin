@@ -1,0 +1,98 @@
+<!-- src/main/resources/META-INF/plugin.xml -->
+<idea-plugin version="2">
+    <id>com.stepscout.plugin</id>
+    <name>StepScout</name>
+    <!-- Version is managed by Gradle (see build.gradle.kts) and patched automatically during build -->
+
+    <vendor email="halmurat.sdet@gmail.com" url="https://halmurattahir.com">StepScout</vendor>
+
+    <description>
+        <![CDATA[
+        <p>
+          Search Cucumber step definitions, spot missing steps across features, and jump to source — all from a dedicated tool window.
+        </p>
+
+        <h3>Key Features</h3>
+        <ul>
+          <li><b>Search steps:</b> fast, fuzzy search across all step definitions.</li>
+          <li><b>Filters:</b> narrow by step class and by “screen” prefix (text before the first colon).</li>
+          <li><b>Missing steps:</b> scan Feature files and list steps with no matching definition.</li>
+          <li><b>One‑click navigation:</b> double‑click results to open the file at the exact line.</li>
+          <li><b>Live stats:</b> totals for scenarios, steps, and features; tool window icon indicates missing steps.</li>
+          <li><b>Kotlin K2:</b> compatible with the latest Kotlin plugin mode.</li>
+        </ul>
+
+        <h3>How It Works</h3>
+        <ul>
+          <li>Indexes Java/Kotlin step methods annotated with <code>Given</code>/<code>When</code>/<code>Then</code> (modern <code>io.cucumber</code> and legacy <code>cucumber.api</code>).</li>
+          <li>Understands Cucumber expressions and common regex patterns.</li>
+          <li>Scans <code>.feature</code> files to detect steps without matching definitions.</li>
+        </ul>
+
+        <h3>Usage</h3>
+        <ul>
+          <li><b>Open:</b> View → Tool Windows → StepScout (or Tools → Search Steps).</li>
+          <li><b>Search:</b> type in the search box; results update as you type.</li>
+          <li><b>Filter:</b> use class and screen dropdowns; <i>Clear All</i> resets filters.</li>
+          <li><b>Navigate:</b> double‑click a result or missing step to jump to source.</li>
+          <li><b>Refresh:</b> press <i>Refresh</i> to recompute stats and missing steps after large changes.</li>
+        </ul>
+
+        <h3>Settings</h3>
+        <ul>
+          <li><b>Exclusions:</b> Settings/Preferences → Tools → StepScout → “Exclude paths” (one per line) to skip directories from scans.</li>
+        </ul>
+
+        <h3>Compatibility</h3>
+        <ul>
+          <li><b>IDEs:</b> IntelliJ IDEA 2024.1–2025.1 (Community & Ultimate).</li>
+          <li><b>Plugins:</b> requires Gherkin and Cucumber for Java (declared as dependencies).</li>
+          <li><b>UI:</b> optimized for the new UI; works with classic UI as well.</li>
+        </ul>
+
+        <p><i>All analysis runs locally; no data leaves your machine.</i></p>
+
+        <h3>Maintainer</h3>
+        <p>
+          <b>Halmurat Tahir</b> — <a href="mailto:halmurat.sdet@gmail.com">halmurat.sdet@gmail.com</a>
+          • <a href="https://www.linkedin.com/in/halmurat-tahir/">LinkedIn</a>
+        </p>
+        ]]>
+    </description>
+
+    <!-- platform & plugin dependencies -->
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
+    <depends>gherkin</depends>
+    <depends>cucumber-java</depends>
+    <depends>org.jetbrains.kotlin</depends>
+    
+    <!-- IntelliJ Platform version compatibility -->
+    <idea-version since-build="241.0" until-build="252.*"/>
+
+    <!-- UI integration -->
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- tool window - basic configuration -->
+        <toolWindow id="StepScout"
+                    anchor="right"
+                    factoryClass="com.stepscout.ui.StepScoutToolWindowFactory"
+                    icon="/icons/pluginIconSmall.svg"
+                    doNotActivateOnStart="false"/>
+        <projectConfigurable instance="com.stepscout.settings.StepScoutConfigurable" displayName="StepScout"/>
+    </extensions>
+
+    <!-- Kotlin plugin compatibility -->
+    <extensions defaultExtensionNs="org.jetbrains.kotlin">
+        <supportsKotlinPluginMode supportsK2="true"/>
+    </extensions>
+
+    <!-- (optional) menu action under Tools ▸ Search Steps -->
+    <actions>
+        <action id="StepScout.SearchAction"
+                class="com.stepscout.actions.SearchStepsAction"
+                text="Search Steps"
+                description="Search Cucumber steps">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
