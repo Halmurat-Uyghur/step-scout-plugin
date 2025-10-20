@@ -44,18 +44,6 @@ Excluded feature files can be listed at the project level. The paths are persist
 to `.idea/stepscout.xml` and can be edited via the **StepScout** configurable
 under *File ▸ Settings* (or *Preferences* on macOS).
 
-## Publishing
-
-Set the `JETBRAINS_TOKEN` environment variable to a JetBrains Marketplace API token
-and run:
-
-```
-./gradlew publishPlugin
-```
-
-This repository includes a GitHub Actions workflow that publishes the plugin
-automatically whenever a tag starting with `v` is pushed.
-
 ## Maintainer / Contact
 
 - Name: Halmurat Tahir
