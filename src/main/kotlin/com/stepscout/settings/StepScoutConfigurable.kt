@@ -34,6 +34,7 @@ class StepScoutConfigurable(private val project: Project) : Configurable {
         val settings = StepScoutSettings.getInstance(project)
         val lines = textarea.text.lines().map { it.trim() }.filter { it.isNotEmpty() }
         settings.excludePaths = lines.toMutableList()
+        project.messageBus.syncPublisher(StepScoutSettingsListener.TOPIC).settingsChanged()
     }
 
     override fun reset() {

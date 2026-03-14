@@ -17,9 +17,16 @@ data class MissingStep(val text: String, val filePath: String, val lineNumber: I
 class MissingStepService(private val project: Project, private val searchService: StepSearchService) {
     private fun isExcluded(path: String): Boolean {
         val settings = StepScoutSettings.getInstance(project)
+        val segments = path.replace('\\', '/').split('/')
         return settings.excludePaths.any { ex ->
-            val normalized = ex.replace('\\', '/')
-            path.contains(normalized)
+            val normalized = ex.replace('\\', '/').trim()
+            if (normalized.contains('/')) {
+                // Multi-segment exclusion: match as a contiguous path subsequence
+                path.replace('\\', '/').contains(normalized)
+            } else {
+                // Single-segment exclusion: match exact directory/file names
+                segments.any { it == normalized }
+            }
         }
     }
     /**
@@ -77,11 +84,12 @@ class MissingStepService(private val project: Project, private val searchService
         for (vf in files) {
             val psiFile = psiManager.findFile(vf) ?: continue
 
-            // plain "Scenario" entries
-            count += PsiTreeUtil.collectElementsOfType(psiFile, GherkinScenario::class.java).size
+            // plain "Scenario" entries (exclude outlines since GherkinScenarioOutline extends GherkinScenario)
+            val allScenarios = PsiTreeUtil.collectElementsOfType(psiFile, GherkinScenario::class.java)
+            val outlines = PsiTreeUtil.collectElementsOfType(psiFile, GherkinScenarioOutline::class.java)
+            count += allScenarios.size - outlines.size
 
             // for outlines, count each example row; fallback to 1 if none
-            val outlines = PsiTreeUtil.collectElementsOfType(psiFile, GherkinScenarioOutline::class.java)
             for (outline in outlines) {
                 var rows = 0
                 for (block in outline.examplesBlocks) {

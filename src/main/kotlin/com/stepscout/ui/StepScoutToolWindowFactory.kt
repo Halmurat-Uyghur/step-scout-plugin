@@ -20,7 +20,7 @@ import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
-import com.intellij.openapi.vfs.VirtualFileManager
+import com.intellij.openapi.vfs.LocalFileSystem
 import javax.swing.DefaultListModel
 import javax.swing.DefaultComboBoxModel
 import javax.swing.JLabel
@@ -86,6 +86,10 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
         var screenCounts: Map<String, Int> = emptyMap()
         var screenKeys: List<String> = emptyList()
         var selectedScreen: String? = null
+        var refreshGen = 0L
+        var updateGen = 0L
+        var onRefreshComplete: () -> Unit = {}
+        var updatingModels = false
 
         val missingListModel = DefaultListModel<String>()
         val missingList = JBList(missingListModel)
@@ -93,6 +97,7 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
 
         // refresh logic must be defined before the button references it
         fun refresh() {
+            val myGen = ++refreshGen
             DumbService.getInstance(project).runWhenSmart {
                 ApplicationManager.getApplication().executeOnPooledThread {
                     // Check if project is disposed before starting
@@ -119,7 +124,8 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
                     ApplicationManager.getApplication().invokeLater {
                         // Check if project is disposed before updating UI
                         if (project.isDisposed) return@invokeLater
-                        
+                        if (refreshGen != myGen) return@invokeLater
+
                         try {
                             val (steps, stepCountResult, featureCountResult, scenarioCountResult, classData, screenData) = computedData
 
@@ -135,27 +141,46 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
                     displayToFull = mapping
                     classKeys = classCounts.keys.sorted()
 
-                    val model = DefaultComboBoxModel<String>()
-                    model.addElement("All Classes")
-                    classKeys.forEach { name ->
-                        model.addElement("$name (${classCounts[name]})")
-                    }
-                    classDropdown.model = model
-                    selectedClasses = null
-                    selectedDisplay = null
-                    classDropdown.selectedIndex = 0
+                    // Snapshot filter state before replacing models, then suppress
+                    // action listeners during model updates to prevent spurious
+                    // updateResults() calls and filter state loss.
+                    val prevDisplay = selectedDisplay
+                    val prevScreen = selectedScreen
+                    updatingModels = true
+                    try {
+                        val model = DefaultComboBoxModel<String>()
+                        model.addElement("All Classes")
+                        classKeys.forEach { name ->
+                            model.addElement("$name (${classCounts[name]})")
+                        }
+                        classDropdown.model = model
+                        if (prevDisplay != null && prevDisplay in classKeys) {
+                            classDropdown.selectedIndex = classKeys.indexOf(prevDisplay) + 1
+                            selectedClasses = displayToFull[prevDisplay]
+                        } else {
+                            selectedClasses = null
+                            selectedDisplay = null
+                            classDropdown.selectedIndex = 0
+                        }
 
-                    screenCounts = screenData
-                    screenKeys = screenCounts.keys.sorted()
+                        screenCounts = screenData
+                        screenKeys = screenCounts.keys.sorted()
 
-                    val screenModel = DefaultComboBoxModel<String>()
-                    screenModel.addElement("All Screens")
-                    screenKeys.forEach { name ->
-                        screenModel.addElement("$name (${screenCounts[name]})")
+                        val screenModel = DefaultComboBoxModel<String>()
+                        screenModel.addElement("All Screens")
+                        screenKeys.forEach { name ->
+                            screenModel.addElement("$name (${screenCounts[name]})")
+                        }
+                        screenDropdown.model = screenModel
+                        if (prevScreen != null && prevScreen in screenKeys) {
+                            screenDropdown.selectedIndex = screenKeys.indexOf(prevScreen) + 1
+                        } else {
+                            selectedScreen = null
+                            screenDropdown.selectedIndex = 0
+                        }
+                    } finally {
+                        updatingModels = false
                     }
-                    screenDropdown.model = screenModel
-                    selectedScreen = null
-                    screenDropdown.selectedIndex = 0
                     
                     missingSteps = steps
                     missingListModel.clear()
@@ -175,6 +200,9 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
                     }
                     
                     classCountLabel.text = "Steps: $stepCountResult"
+
+                    // Refresh the step results list to reflect new data
+                    onRefreshComplete()
                         } catch (e: Exception) {
                             // Handle UI update errors gracefully - log but don't crash
                             // Could add logging here if needed
@@ -194,7 +222,7 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
                     val idx = missingList.locationToIndex(e.point)
                     if (idx >= 0 && idx < missingSteps.size) {
                         val step = missingSteps[idx]
-                        val vf = VirtualFileManager.getInstance().findFileByUrl("file://${step.filePath}")
+                        val vf = LocalFileSystem.getInstance().findFileByPath(step.filePath)
                         if (vf != null) {
                             OpenFileDescriptor(project, vf, step.lineNumber - 1, 0).navigate(true)
                         }
@@ -203,10 +231,9 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
             }
         })
 
-        // Initial refresh - run immediately and also when smart mode starts
-        refresh()
+        // Initial refresh — runWhenSmart ensures refresh runs after indexing completes
         DumbService.getInstance(project).runWhenSmart {
-            refresh() // Ensure we refresh once indexing is complete
+            refresh()
         }
 
         val listModel = DefaultListModel<String>()
@@ -218,6 +245,7 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
         }
 
         fun updateResults() {
+            val myGen = ++updateGen
             val query = searchField.text
             val classFilter = selectedClasses
             val screenFilter = selectedScreen
@@ -246,7 +274,8 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
                     ApplicationManager.getApplication().invokeLater {
                         // Check if project is disposed before updating UI
                         if (project.isDisposed) return@invokeLater
-                        
+                        if (updateGen != myGen) return@invokeLater
+
                         try {
                             val (results, total) = searchData
                             stepResults = results
@@ -270,13 +299,20 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
             }
         }
 
+        onRefreshComplete = { updateResults() }
+
+        val debounceTimer = javax.swing.Timer(200) { updateResults() }.apply {
+            isRepeats = false
+        }
+
         searchField.addDocumentListener(object : javax.swing.event.DocumentListener {
-            override fun insertUpdate(e: javax.swing.event.DocumentEvent) = updateResults()
-            override fun removeUpdate(e: javax.swing.event.DocumentEvent) = updateResults()
-            override fun changedUpdate(e: javax.swing.event.DocumentEvent) = updateResults()
+            override fun insertUpdate(e: javax.swing.event.DocumentEvent) { debounceTimer.restart() }
+            override fun removeUpdate(e: javax.swing.event.DocumentEvent) { debounceTimer.restart() }
+            override fun changedUpdate(e: javax.swing.event.DocumentEvent) { debounceTimer.restart() }
         })
 
         classDropdown.addActionListener {
+            if (updatingModels) return@addActionListener
             val idx = classDropdown.selectedIndex
             if (idx <= 0) {
                 selectedClasses = null
@@ -290,6 +326,7 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
         }
 
         screenDropdown.addActionListener {
+            if (updatingModels) return@addActionListener
             val idx = screenDropdown.selectedIndex
             selectedScreen = if (idx <= 0) null else screenKeys[idx - 1]
             updateResults()
@@ -311,7 +348,7 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
                     val idx = resultList.locationToIndex(e.point)
                     if (idx >= 0 && idx < stepResults.size) {
                         val step = stepResults[idx]
-                        val vf = VirtualFileManager.getInstance().findFileByUrl("file://${step.filePath}")
+                        val vf = LocalFileSystem.getInstance().findFileByPath(step.filePath)
                         if (vf != null) {
                             OpenFileDescriptor(project, vf, step.lineNumber - 1, 0).navigate(true)
                         }
@@ -372,32 +409,37 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
         }
 
         // listen for file saves/changes and recompute results once indexing completes
-        val connection = project.messageBus.connect()
+        val disposable = com.intellij.openapi.util.Disposer.newDisposable("StepScout-$project")
+        val connection = project.messageBus.connect(disposable)
         connection.subscribe(
             com.intellij.openapi.vfs.VirtualFileManager.VFS_CHANGES,
             object : com.intellij.openapi.vfs.newvfs.BulkFileListener {
                 override fun after(events: MutableList<out com.intellij.openapi.vfs.newvfs.events.VFileEvent>) {
-                    // Invalidate cache when files change
+                    val relevant = events.any { event ->
+                        val path = event.path
+                        path.endsWith(".kt") || path.endsWith(".java") || path.endsWith(".feature")
+                    }
+                    if (!relevant) return
                     searchService.invalidateCache()
                     DumbService.getInstance(project).runWhenSmart {
-                        refresh() // This will update both UI content and icon
+                        refresh()
                     }
                 }
             }
         )
-        
-        // Listen for indexing completion to refresh automatically
         connection.subscribe(
-            DumbService.DUMB_MODE,
-            object : com.intellij.openapi.project.DumbService.DumbModeListener {
-                override fun exitDumbMode() {
-                    // Refresh when indexing completes to update UI content
-                    refresh()
+            com.stepscout.settings.StepScoutSettingsListener.TOPIC,
+            object : com.stepscout.settings.StepScoutSettingsListener {
+                override fun settingsChanged() {
+                    searchService.invalidateCache()
+                    DumbService.getInstance(project).runWhenSmart {
+                        refresh()
+                    }
                 }
             }
         )
-        
-        content.setDisposer { connection.disconnect() }
+
+        content.setDisposer { com.intellij.openapi.util.Disposer.dispose(disposable) }
 
         toolWindow.contentManager.addContent(content)
     }

@@ -36,9 +36,12 @@ repositories {
     testImplementation("io.mockk:mockk:1.13.9") {
         exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-core")
     }
-}
+        implementation(kotlin("stdlib-jdk8"))
+    }
 
-kotlin { jvmToolchain(21) }
+kotlin {
+    jvmToolchain(21)
+}
 tasks.withType<JavaCompile>().configureEach {
     options.release.set(17)
 }
