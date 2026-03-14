@@ -30,12 +30,41 @@ class StepSearchService(
 ) {
     
     // Cache for expensive PSI operations
-    @Volatile
+    private val cacheLock = Any()
     private var cachedDefinitions: List<StepDefinition>? = null
-    
+
+    private val regexCache = mutableMapOf<String, Regex>()
+
+    private fun cachedRegex(pattern: String): Regex {
+        return regexCache.getOrPut(pattern) {
+            Regex(pattern, RegexOption.IGNORE_CASE)
+        }
+    }
+
     // Simple cache invalidation - clear on any file change
     fun invalidateCache() {
-        cachedDefinitions = null
+        synchronized(cacheLock) {
+            cachedDefinitions = null
+            regexCache.clear()
+        }
+    }
+
+    private fun buildRegexText(value: String): String {
+        val hasGroups = value.contains("(") && value.contains(")")
+        val looksLikeRegex = value.startsWith("^") || value.endsWith("$") ||
+            value.contains("\\") || hasGroups
+
+        return if (looksLikeRegex) {
+            var tmp = value
+            if (!tmp.startsWith("^")) tmp = "^$tmp"
+            if (!tmp.endsWith("$")) tmp += "$"
+            tmp
+        } else {
+            val parts = "\\{[^}]+\\}".toRegex().split(value)
+            val escaped = parts.joinToString(".*") { Regex.escape(it) }
+            val completed = if (!escaped.startsWith("^")) "^$escaped" else escaped
+            if (!completed.endsWith("$")) "$completed$" else completed
+        }
     }
 
     private fun extractScreenName(text: String): String {
@@ -71,7 +100,9 @@ class StepSearchService(
         if (testDefinitions != null) return testDefinitions
         
         // Return cached result if available
-        cachedDefinitions?.let { return it }
+        synchronized(cacheLock) {
+            cachedDefinitions?.let { return it }
+        }
         
         // Check if project is disposed or indices are not ready
         if (project.isDisposed || DumbService.getInstance(project).isDumb) {
@@ -96,29 +127,14 @@ class StepSearchService(
                 val value = com.intellij.openapi.util.text.StringUtil.unescapeStringCharacters(unquoted)
                 val pattern = if (value.isNotBlank()) value else method.name
 
-                val hasGroups = pattern.contains("(") && pattern.contains(")")
-                val looksLikeRegex = pattern.startsWith("^") || pattern.endsWith("$") ||
-                    pattern.contains("\\") || hasGroups
-
-                val regexText = if (looksLikeRegex) {
-                    var tmp = pattern
-                    if (!tmp.startsWith("^")) tmp = "^$tmp"
-                    if (!tmp.endsWith("$")) tmp += "$"
-                    tmp
-                } else {
-                    // Convert cucumber expressions like {string} into wildcards and escape
-                    val parts = "\\{[^}]+\\}".toRegex().split(pattern)
-                    val escaped = parts.joinToString(".*") { Regex.escape(it) }
-                    val completed = if (!escaped.startsWith("^")) "^$escaped" else escaped
-                    if (!completed.endsWith("$")) "$completed$" else completed
-                }
+                val regexText = buildRegexText(pattern)
                 val file = method.containingFile
                 val vf = file.virtualFile ?: continue
                 val line = docManager.getDocument(file)?.getLineNumber(method.textOffset)?.plus(1) ?: 1
                 val className = method.containingClass?.qualifiedName ?: vf.nameWithoutExtension
                 val screen = extractScreenName(value)
                 steps += StepDefinition(
-                    Regex(regexText, RegexOption.IGNORE_CASE),
+                    cachedRegex(regexText),
                     vf.path,
                     line,
                     className,
@@ -138,25 +154,12 @@ class StepSearchService(
                 val arg = call.valueArguments.firstOrNull()?.getArgumentExpression() as? KtStringTemplateExpression ?: continue
                 val raw = arg.text
                 val value = com.intellij.openapi.util.text.StringUtil.unquoteString(raw)
-                val hasGroups = value.contains("(") && value.contains(")")
-                val looksLikeRegex = value.startsWith("^") || value.endsWith("$") ||
-                    value.contains("\\") || hasGroups
-                val regexText = if (looksLikeRegex) {
-                    var tmp = value
-                    if (!tmp.startsWith("^")) tmp = "^$tmp"
-                    if (!tmp.endsWith("$")) tmp += "$"
-                    tmp
-                } else {
-                    val parts = "\\{[^}]+\\}".toRegex().split(value)
-                    val escaped = parts.joinToString(".*") { Regex.escape(it) }
-                    val completed = if (!escaped.startsWith("^")) "^$escaped" else escaped
-                    if (!completed.endsWith("$")) "$completed$" else completed
-                }
+                val regexText = buildRegexText(value)
                 val line = docManager.getDocument(ktFile)?.getLineNumber(call.textOffset)?.plus(1) ?: 1
                 val className = ktFile.name.substringBeforeLast(".")
                 val screen = extractScreenName(value)
                 steps += StepDefinition(
-                    Regex(regexText, RegexOption.IGNORE_CASE),
+                    cachedRegex(regexText),
                     vf.path,
                     line,
                     className,
@@ -166,7 +169,9 @@ class StepSearchService(
             }
             
             // Cache the results for future use
-            cachedDefinitions = steps
+            synchronized(cacheLock) {
+                cachedDefinitions = steps
+            }
             return steps
         } catch (e: IndexNotReadyException) {
             // Indices are not ready, return empty list

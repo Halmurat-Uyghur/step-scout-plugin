@@ -15,6 +15,16 @@ class StepSearchServiceTest {
     }
 
     @Test
+    fun invalidateCacheForcesRefresh() {
+        val defs1 = listOf(
+            StepDefinition(Regex("^step one$"), "/tmp/A.kt", 1, "ASteps", "")
+        )
+        val service = StepSearchService(mockk(), defs1)
+        assertEquals(1, service.getStepDefinitions().size)
+        assertEquals("ASteps", service.getStepDefinitions()[0].className)
+    }
+
+    @Test
     fun findStepsFiltersAndScores() {
         val defs = listOf(
             StepDefinition(Regex("^I login$"), "/tmp/Login.kt", 1, "LoginSteps", "login"),
