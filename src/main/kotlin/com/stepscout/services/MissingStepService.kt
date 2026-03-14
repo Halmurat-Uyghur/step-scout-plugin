@@ -45,7 +45,7 @@ class MissingStepService(private val project: Project, private val searchService
             val steps = PsiTreeUtil.collectElementsOfType(psiFile, GherkinStep::class.java)
             for (step in steps) {
                 val stepText = step.name.trim()
-                if (patterns.none { it.matches(stepText) }) {
+                if (!patterns.any { it.matches(stepText) }) {
                     val line = document?.getLineNumber(step.textOffset)?.plus(1) ?: 1
                     missing += MissingStep(stepText, vf.path, line)
                 }

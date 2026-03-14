@@ -305,6 +305,17 @@ class StepSearchService(
         return pattern
     }
 
+    fun countFilteredSteps(
+        classFilter: Set<String>? = null,
+        screenFilter: String? = null
+    ): Int {
+        return getStepDefinitions()
+            .count { def ->
+                (classFilter == null || def.className in classFilter) &&
+                (screenFilter == null || def.screenName == screenFilter)
+            }
+    }
+
     /**
      * Returns true if a step definition exists that matches the given [stepText].
      * This does a simple conversion of cucumber expressions like `{string}` into

@@ -233,9 +233,9 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
                         try {
                             val results = searchService.findSteps(query, classFilter, screenFilter)
                             val total = if (query.isBlank()) {
-                                results.size // If no query, results is already all items
+                                results.size
                             } else {
-                                searchService.findSteps("", classFilter, screenFilter).size
+                                searchService.countFilteredSteps(classFilter, screenFilter)
                             }
                             Pair(results, total)
                         } catch (e: Exception) {
