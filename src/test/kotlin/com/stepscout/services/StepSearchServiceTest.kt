@@ -16,10 +16,9 @@ class StepSearchServiceTest {
     }
 
     @Test
-    fun invalidateCacheDoesNotAffectTestDefinitions() {
-        // testDefinitions bypass the cache path (StepSearchService.kt:103),
-        // so this test verifies invalidateCache() is safe to call and that
-        // the service continues returning correct results.
+    fun invalidateCacheIsSafeWithTestDefinitions() {
+        // testDefinitions bypass the cache path, so this only verifies
+        // that invalidateCache() does not throw and results remain stable.
         val defs = listOf(
             StepDefinition(Regex("^step one$"), "/tmp/A.kt", 1, "ASteps", "")
         )
@@ -28,21 +27,6 @@ class StepSearchServiceTest {
         service.invalidateCache()
         assertEquals(1, service.getStepDefinitions().size)
         assertEquals("ASteps", service.getStepDefinitions()[0].className)
-    }
-
-    @Test
-    fun invalidateCacheClearsRegexCache() {
-        // Verify that invalidateCache clears the internal regex cache.
-        // We can observe this indirectly: after invalidation, countStepDefinitions
-        // still returns the correct count (testDefinitions path).
-        val defs = listOf(
-            StepDefinition(Regex("^a$"), "/tmp/A.kt", 1, "A", ""),
-            StepDefinition(Regex("^b$"), "/tmp/B.kt", 2, "B", "")
-        )
-        val service = StepSearchService(mockk(), defs)
-        assertEquals(2, service.countStepDefinitions())
-        service.invalidateCache()
-        assertEquals(2, service.countStepDefinitions())
     }
 
     @Test

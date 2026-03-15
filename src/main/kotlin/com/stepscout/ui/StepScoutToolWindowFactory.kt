@@ -19,7 +19,13 @@ import com.intellij.ui.SearchTextField
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.ActionPlaces
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
+import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.vfs.LocalFileSystem
 import javax.swing.DefaultListModel
 import javax.swing.DefaultComboBoxModel
@@ -68,15 +74,22 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
 
         // base icon is configured in plugin.xml
         val missingLabel = JLabel("Missing Steps")
-        val statsLabel = JLabel("")
-        val classCountLabel = JLabel("")
+        val statsLabel = JLabel("Scenarios: –  |  Steps: –  |  Features: –")
+        val classCountLabel = JLabel("Steps: –")
         val classDropdown = JComboBox<String>().apply {
-            prototypeDisplayValue = "All Classes (999)"
+            toolTipText = "Filter by step class"
         }
         val screenDropdown = JComboBox<String>().apply {
-            prototypeDisplayValue = "All Screens (999)"
+            toolTipText = "Filter by screen"
         }
-        val clearButton = JButton("Clear All")
+        val clearButton = JButton(AllIcons.Actions.Rollback).apply {
+            toolTipText = "Reset all filters"
+            isBorderPainted = false
+            isContentAreaFilled = false
+            isFocusPainted = false
+            margin = java.awt.Insets(0, 0, 0, 0)
+            preferredSize = java.awt.Dimension(24, 24)
+        }
         var fullClassCounts: Map<String, Int> = emptyMap()
         var classCounts: Map<String, Int> = emptyMap()
         var displayToFull: Map<String, Set<String>> = emptyMap()
@@ -189,7 +202,7 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
                         missingListModel.addElement("${it.text} - $fileName:${it.lineNumber}")
                     }
                     missingLabel.text = "Missing ${steps.size} Steps"
-                    statsLabel.text = "<html>Total Scenarios: $scenarioCountResult<br>Steps: $stepCountResult<br>Features: $featureCountResult</html>"
+                    statsLabel.text = "Scenarios: $scenarioCountResult  |  Steps: $stepCountResult  |  Features: $featureCountResult"
                     
                     // Update tool window icon based on missing steps
                     // Note: Icon is also managed by StepScoutIconService for automatic updates
@@ -212,8 +225,24 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
             }
         }
 
-        val refreshButton = JButton("Refresh").apply {
-            addActionListener { refresh() }
+        val refreshAction = object : AnAction("Refresh", "Refresh step definitions and missing steps", AllIcons.Actions.Refresh) {
+            override fun actionPerformed(e: AnActionEvent) { refresh() }
+        }
+
+        val settingsAction = object : AnAction("Settings", "StepScout Settings (exclude paths)", AllIcons.General.Settings) {
+            override fun actionPerformed(e: AnActionEvent) {
+                ShowSettingsUtil.getInstance().showSettingsDialog(
+                    project, com.stepscout.settings.StepScoutConfigurable::class.java
+                )
+            }
+        }
+
+        val actionGroup = DefaultActionGroup().apply {
+            add(refreshAction)
+            add(settingsAction)
+        }
+        val toolbar = ActionManager.getInstance().createActionToolbar(ActionPlaces.TOOLWINDOW_CONTENT, actionGroup, true).apply {
+            targetComponent = null
         }
 
         missingList.addMouseListener(object : MouseAdapter() {
@@ -357,47 +386,57 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
             }
         })
 
+        // --- Missing Steps section ---
+        val missingScroll = JBScrollPane(missingList).apply {
+            border = JBUI.Borders.emptyLeft(13)
+        }
         val missingPanel = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.emptyBottom(4)
-            add(missingLabel, BorderLayout.NORTH)
-            add(JBScrollPane(missingList), BorderLayout.CENTER)
+            add(missingLabel.apply { border = JBUI.Borders.empty(0, 13, 4, 0) }, BorderLayout.NORTH)
+            add(missingScroll, BorderLayout.CENTER)
         }
 
-        val resultScroll = JBScrollPane(resultList)
-
-        val dropdownPanel = JPanel(GridLayout(1, 3, 4, 0)).apply {
+        // --- Search & Results section ---
+        val resultScroll = JBScrollPane(resultList).apply {
+            border = JBUI.Borders.emptyLeft(13)
+        }
+        val dropdownRow = JPanel(GridLayout(1, 2, 4, 0)).apply {
             add(classDropdown)
             add(screenDropdown)
-            add(clearButton)
         }
-
-        val searchPanel = JPanel(GridLayout(2, 1, 0, 4)).apply {
-            add(dropdownPanel)
-            add(searchField)
+        val filterBar = JPanel(BorderLayout(4, 0)).apply {
+            border = JBUI.Borders.empty(4, 4, 4, 8)
+            add(dropdownRow, BorderLayout.CENTER)
+            add(clearButton, BorderLayout.EAST)
         }
-
-        val topResultsPanel = JPanel(BorderLayout()).apply {
-            add(searchPanel, BorderLayout.NORTH)
-            add(classCountLabel, BorderLayout.SOUTH)
+        val searchBar = JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.empty(0, 4, 4, 4)
+            add(searchField, BorderLayout.CENTER)
         }
-
+        val bottomHeader = JPanel(BorderLayout()).apply {
+            add(filterBar, BorderLayout.NORTH)
+            add(searchBar, BorderLayout.CENTER)
+            add(classCountLabel.apply { border = JBUI.Borders.empty(0, 4, 2, 0) }, BorderLayout.SOUTH)
+        }
+        val bottomTop = JPanel(BorderLayout()).apply {
+            add(javax.swing.JSeparator(), BorderLayout.NORTH)
+            add(bottomHeader, BorderLayout.CENTER)
+        }
         val bottomPanel = JPanel(BorderLayout()).apply {
-            add(topResultsPanel, BorderLayout.NORTH)
+            add(bottomTop, BorderLayout.NORTH)
             add(resultScroll, BorderLayout.CENTER)
         }
 
-        val splitPane = javax.swing.JSplitPane(javax.swing.JSplitPane.VERTICAL_SPLIT, missingPanel, bottomPanel).apply {
-            resizeWeight = 0.5
-            dividerSize = 4
+        // --- Layout ---
+        val splitPane = com.intellij.ui.OnePixelSplitter(true, 0.4f).apply {
+            firstComponent = missingPanel
+            secondComponent = bottomPanel
         }
-
         val topPanel = JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.empty(4, 13, 4, 0)
             add(statsLabel, BorderLayout.CENTER)
-            add(refreshButton, BorderLayout.EAST)
+            add(toolbar.component, BorderLayout.EAST)
         }
-
         val panel = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(4)
             add(topPanel, BorderLayout.NORTH)
             add(splitPane, BorderLayout.CENTER)
         }
@@ -409,8 +448,7 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
         }
 
         // listen for file saves/changes and recompute results once indexing completes
-        val disposable = com.intellij.openapi.util.Disposer.newDisposable("StepScout-$project")
-        val connection = project.messageBus.connect(disposable)
+        val connection = project.messageBus.connect()
         connection.subscribe(
             com.intellij.openapi.vfs.VirtualFileManager.VFS_CHANGES,
             object : com.intellij.openapi.vfs.newvfs.BulkFileListener {
@@ -439,7 +477,7 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
             }
         )
 
-        content.setDisposer { com.intellij.openapi.util.Disposer.dispose(disposable) }
+        content.setDisposer { connection.disconnect() }
 
         toolWindow.contentManager.addContent(content)
     }

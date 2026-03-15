@@ -17,16 +17,9 @@ data class MissingStep(val text: String, val filePath: String, val lineNumber: I
 class MissingStepService(private val project: Project, private val searchService: StepSearchService) {
     private fun isExcluded(path: String): Boolean {
         val settings = StepScoutSettings.getInstance(project)
-        val segments = path.replace('\\', '/').split('/')
         return settings.excludePaths.any { ex ->
-            val normalized = ex.replace('\\', '/').trim()
-            if (normalized.contains('/')) {
-                // Multi-segment exclusion: match as a contiguous path subsequence
-                path.replace('\\', '/').contains(normalized)
-            } else {
-                // Single-segment exclusion: match exact directory/file names
-                segments.any { it == normalized }
-            }
+            val normalized = ex.replace('\\', '/')
+            path.contains(normalized)
         }
     }
     /**

@@ -104,6 +104,8 @@ class StepSearchService(
 
         // Bounded retry loop: if the cache is invalidated during a scan,
         // retry up to 3 times before returning the last computed result.
+        var lastComputed: List<StepDefinition> = emptyList()
+
         repeat(3) {
             // Return cached result if available
             val versionAtStart: Long
@@ -114,7 +116,7 @@ class StepSearchService(
 
             // Check if project is disposed or indices are not ready
             if (project.isDisposed || DumbService.getInstance(project).isDumb) {
-                return emptyList()
+                return lastComputed
             }
 
             try {
@@ -176,6 +178,8 @@ class StepSearchService(
                     }
                 }
 
+                lastComputed = steps
+
                 // Cache the results only if no invalidation occurred during computation
                 synchronized(cacheLock) {
                     if (cacheVersion == versionAtStart) {
@@ -185,13 +189,13 @@ class StepSearchService(
                     // Version changed — loop will retry with fresh data
                 }
             } catch (e: IndexNotReadyException) {
-                return emptyList()
+                return lastComputed
             } catch (e: Exception) {
-                return emptyList()
+                return lastComputed
             }
         }
-        // Exhausted retries — return empty rather than risk infinite work
-        return emptyList()
+        // Exhausted retries — return last computed result rather than blanking the UI
+        return lastComputed
     }
 
     /**
