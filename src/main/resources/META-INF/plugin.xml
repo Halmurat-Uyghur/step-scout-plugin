@@ -77,8 +77,8 @@
                     anchor="right"
                     factoryClass="com.stepscout.ui.StepScoutToolWindowFactory"
                     icon="/icons/pluginIconSmall.svg"
-                    doNotActivateOnStart="false"/>
-        <projectConfigurable instance="com.stepscout.settings.StepScoutConfigurable" displayName="StepScout"/>
+                    doNotActivateOnStart="true"/>
+        <projectConfigurable instance="com.stepscout.settings.StepScoutConfigurable" displayName="StepScout" parentId="tools"/>
     </extensions>
 
     <!-- Kotlin plugin compatibility -->
@@ -93,6 +93,14 @@
                 text="Search Steps"
                 description="Search Cucumber steps">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+        <action id="StepScout.ExcludeFeature"
+                class="com.stepscout.actions.ExcludeFeatureAction"
+                text="Exclude from StepScout"
+                description="Add this feature file to StepScout's excluded paths">
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+            <add-to-group group-id="EditorTabPopupMenu" anchor="last"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </action>
     </actions>
 </idea-plugin>

@@ -3,6 +3,7 @@ package com.stepscout.services
 import io.mockk.mockk
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class StepSearchServiceTest {
     @Test
@@ -15,6 +16,20 @@ class StepSearchServiceTest {
     }
 
     @Test
+    fun invalidateCacheIsSafeWithTestDefinitions() {
+        // testDefinitions bypass the cache path, so this only verifies
+        // that invalidateCache() does not throw and results remain stable.
+        val defs = listOf(
+            StepDefinition(Regex("^step one$"), "/tmp/A.kt", 1, "ASteps", "")
+        )
+        val service = StepSearchService(mockk(), defs)
+        assertEquals(1, service.getStepDefinitions().size)
+        service.invalidateCache()
+        assertEquals(1, service.getStepDefinitions().size)
+        assertEquals("ASteps", service.getStepDefinitions()[0].className)
+    }
+
+    @Test
     fun findStepsFiltersAndScores() {
         val defs = listOf(
             StepDefinition(Regex("^I login$"), "/tmp/Login.kt", 1, "LoginSteps", "login"),
@@ -24,5 +39,39 @@ class StepSearchServiceTest {
         val results = service.findSteps("login", classFilter = setOf("LoginSteps"))
         assertEquals(1, results.size)
         assertEquals("I login", results[0].text)
+    }
+
+    @Test
+    fun findStepsWithScreenFilter() {
+        val defs = listOf(
+            StepDefinition(Regex("^login: I enter credentials$"), "/tmp/Login.kt", 1, "Steps", "login"),
+            StepDefinition(Regex("^home: I see dashboard$"), "/tmp/Home.kt", 2, "Steps", "home")
+        )
+        val service = StepSearchService(mockk(), defs)
+        val results = service.findSteps("", screenFilter = "login")
+        assertEquals(1, results.size)
+    }
+
+    @Test
+    fun countFilteredSteps() {
+        val defs = listOf(
+            StepDefinition(Regex("^a$"), "/tmp/A.kt", 1, "ClassA", ""),
+            StepDefinition(Regex("^b$"), "/tmp/B.kt", 2, "ClassB", ""),
+            StepDefinition(Regex("^c$"), "/tmp/C.kt", 3, "ClassA", "")
+        )
+        val service = StepSearchService(mockk(), defs)
+        assertEquals(3, service.countFilteredSteps())
+        assertEquals(2, service.countFilteredSteps(classFilter = setOf("ClassA")))
+        assertEquals(1, service.countFilteredSteps(classFilter = setOf("ClassB")))
+    }
+
+    @Test
+    fun hasStepDefinition() {
+        val defs = listOf(
+            StepDefinition(Regex("^I login$"), "/tmp/Login.kt", 1, "Steps", "")
+        )
+        val service = StepSearchService(mockk(), defs)
+        assertTrue(service.hasStepDefinition("I login"))
+        assertTrue(!service.hasStepDefinition("I logout"))
     }
 }

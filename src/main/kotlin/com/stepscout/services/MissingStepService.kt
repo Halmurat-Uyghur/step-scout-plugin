@@ -45,7 +45,7 @@ class MissingStepService(private val project: Project, private val searchService
             val steps = PsiTreeUtil.collectElementsOfType(psiFile, GherkinStep::class.java)
             for (step in steps) {
                 val stepText = step.name.trim()
-                if (patterns.none { it.matches(stepText) }) {
+                if (!patterns.any { it.matches(stepText) }) {
                     val line = document?.getLineNumber(step.textOffset)?.plus(1) ?: 1
                     missing += MissingStep(stepText, vf.path, line)
                 }
@@ -77,11 +77,12 @@ class MissingStepService(private val project: Project, private val searchService
         for (vf in files) {
             val psiFile = psiManager.findFile(vf) ?: continue
 
-            // plain "Scenario" entries
-            count += PsiTreeUtil.collectElementsOfType(psiFile, GherkinScenario::class.java).size
+            // plain "Scenario" entries (exclude outlines since GherkinScenarioOutline extends GherkinScenario)
+            val allScenarios = PsiTreeUtil.collectElementsOfType(psiFile, GherkinScenario::class.java)
+            val outlines = PsiTreeUtil.collectElementsOfType(psiFile, GherkinScenarioOutline::class.java)
+            count += allScenarios.size - outlines.size
 
             // for outlines, count each example row; fallback to 1 if none
-            val outlines = PsiTreeUtil.collectElementsOfType(psiFile, GherkinScenarioOutline::class.java)
             for (outline in outlines) {
                 var rows = 0
                 for (block in outline.examplesBlocks) {

@@ -30,12 +30,43 @@ class StepSearchService(
 ) {
     
     // Cache for expensive PSI operations
-    @Volatile
+    private val cacheLock = Any()
     private var cachedDefinitions: List<StepDefinition>? = null
-    
+    @Volatile private var cacheVersion = 0L
+
+    private val regexCache = java.util.concurrent.ConcurrentHashMap<String, Regex>()
+
+    private fun cachedRegex(pattern: String): Regex {
+        return regexCache.computeIfAbsent(pattern) {
+            Regex(it, RegexOption.IGNORE_CASE)
+        }
+    }
+
     // Simple cache invalidation - clear on any file change
     fun invalidateCache() {
-        cachedDefinitions = null
+        synchronized(cacheLock) {
+            cachedDefinitions = null
+            cacheVersion++
+            regexCache.clear()
+        }
+    }
+
+    private fun buildRegexText(value: String): String {
+        val hasGroups = value.contains("(") && value.contains(")")
+        val looksLikeRegex = value.startsWith("^") || value.endsWith("$") ||
+            value.contains("\\") || hasGroups
+
+        return if (looksLikeRegex) {
+            var tmp = value
+            if (!tmp.startsWith("^")) tmp = "^$tmp"
+            if (!tmp.endsWith("$")) tmp += "$"
+            tmp
+        } else {
+            val parts = "\\{[^}]+\\}".toRegex().split(value)
+            val escaped = parts.joinToString(".*") { Regex.escape(it) }
+            val completed = if (!escaped.startsWith("^")) "^$escaped" else escaped
+            if (!completed.endsWith("$")) "$completed$" else completed
+        }
     }
 
     private fun extractScreenName(text: String): String {
@@ -47,7 +78,8 @@ class StepSearchService(
         val firstSpace = text.indexOf(' ')
         if (firstSpace != -1 && colon > firstSpace) return ""
 
-        return text.substring(0, colon).trim()
+        val name = text.substring(0, colon).trim()
+        return if (name.length > 50) name.substring(0, 50) else name
     }
 
     // Support both modern io.cucumber and legacy cucumber.api annotation packages
@@ -69,112 +101,101 @@ class StepSearchService(
      */
     fun getStepDefinitions(): List<StepDefinition> {
         if (testDefinitions != null) return testDefinitions
-        
-        // Return cached result if available
-        cachedDefinitions?.let { return it }
-        
-        // Check if project is disposed or indices are not ready
-        if (project.isDisposed || DumbService.getInstance(project).isDumb) {
-            return emptyList()
-        }
-        
-        try {
-            val scope = GlobalSearchScope.allScope(project)
-            val facade = JavaPsiFacade.getInstance(project)
-            val psiManager = PsiManager.getInstance(project)
-            val docManager = PsiDocumentManager.getInstance(project)
 
-            val steps = mutableListOf<StepDefinition>()
+        // Bounded retry loop: if the cache is invalidated during a scan,
+        // retry up to 3 times before returning the last computed result.
+        var lastComputed: List<StepDefinition> = emptyList()
 
-        for (fqName in stepAnnotations) {
-            val clazz = facade.findClass(fqName, scope) ?: continue
-            val methods = AnnotatedElementsSearch.searchPsiMethods(clazz, scope).findAll()
-            for (method in methods) {
-                val annotation = method.getAnnotation(fqName)
-                val rawValue = annotation?.findAttributeValue("value")?.text ?: ""
-                val unquoted = com.intellij.openapi.util.text.StringUtil.unquoteString(rawValue)
-                val value = com.intellij.openapi.util.text.StringUtil.unescapeStringCharacters(unquoted)
-                val pattern = if (value.isNotBlank()) value else method.name
+        repeat(3) {
+            // Return cached result if available
+            val versionAtStart: Long
+            synchronized(cacheLock) {
+                cachedDefinitions?.let { return it }
+                versionAtStart = cacheVersion
+            }
 
-                val hasGroups = pattern.contains("(") && pattern.contains(")")
-                val looksLikeRegex = pattern.startsWith("^") || pattern.endsWith("$") ||
-                    pattern.contains("\\") || hasGroups
+            // Check if project is disposed or indices are not ready
+            if (project.isDisposed || DumbService.getInstance(project).isDumb) {
+                return lastComputed
+            }
 
-                val regexText = if (looksLikeRegex) {
-                    var tmp = pattern
-                    if (!tmp.startsWith("^")) tmp = "^$tmp"
-                    if (!tmp.endsWith("$")) tmp += "$"
-                    tmp
-                } else {
-                    // Convert cucumber expressions like {string} into wildcards and escape
-                    val parts = "\\{[^}]+\\}".toRegex().split(pattern)
-                    val escaped = parts.joinToString(".*") { Regex.escape(it) }
-                    val completed = if (!escaped.startsWith("^")) "^$escaped" else escaped
-                    if (!completed.endsWith("$")) "$completed$" else completed
+            try {
+                val scope = GlobalSearchScope.allScope(project)
+                val facade = JavaPsiFacade.getInstance(project)
+                val psiManager = PsiManager.getInstance(project)
+                val docManager = PsiDocumentManager.getInstance(project)
+
+                val steps = mutableListOf<StepDefinition>()
+
+                for (fqName in stepAnnotations) {
+                    val clazz = facade.findClass(fqName, scope) ?: continue
+                    val methods = AnnotatedElementsSearch.searchPsiMethods(clazz, scope).findAll()
+                    for (method in methods) {
+                        val annotation = method.getAnnotation(fqName)
+                        val rawValue = annotation?.findAttributeValue("value")?.text ?: ""
+                        val unquoted = com.intellij.openapi.util.text.StringUtil.unquoteString(rawValue)
+                        val value = com.intellij.openapi.util.text.StringUtil.unescapeStringCharacters(unquoted)
+                        val pattern = if (value.isNotBlank()) value else method.name
+
+                        val regexText = buildRegexText(pattern)
+                        val file = method.containingFile
+                        val vf = file.virtualFile ?: continue
+                        val line = docManager.getDocument(file)?.getLineNumber(method.textOffset)?.plus(1) ?: 1
+                        val className = method.containingClass?.qualifiedName ?: vf.nameWithoutExtension
+                        val screen = extractScreenName(value)
+                        steps += StepDefinition(
+                            cachedRegex(regexText),
+                            vf.path,
+                            line,
+                            className,
+                            screen
+                        )
+                    }
                 }
-                val file = method.containingFile
-                val vf = file.virtualFile ?: continue
-                val line = docManager.getDocument(file)?.getLineNumber(method.textOffset)?.plus(1) ?: 1
-                val className = method.containingClass?.qualifiedName ?: vf.nameWithoutExtension
-                val screen = extractScreenName(value)
-                steps += StepDefinition(
-                    Regex(regexText, RegexOption.IGNORE_CASE),
-                    vf.path,
-                    line,
-                    className,
-                    screen
-                )
-            }
-        }
 
-        // Kotlin step definitions using cucumber-java8 En API
-        val ktFiles = FilenameIndex.getAllFilesByExt(project, "kt", scope)
-        for (vf in ktFiles) {
-            val ktFile = psiManager.findFile(vf) as? KtFile ?: continue
-            val calls = PsiTreeUtil.collectElementsOfType(ktFile, KtCallExpression::class.java)
-            for (call in calls) {
-                val name = call.calleeExpression?.text ?: continue
-                if (name !in listOf("Given", "When", "Then", "And", "But")) continue
-                val arg = call.valueArguments.firstOrNull()?.getArgumentExpression() as? KtStringTemplateExpression ?: continue
-                val raw = arg.text
-                val value = com.intellij.openapi.util.text.StringUtil.unquoteString(raw)
-                val hasGroups = value.contains("(") && value.contains(")")
-                val looksLikeRegex = value.startsWith("^") || value.endsWith("$") ||
-                    value.contains("\\") || hasGroups
-                val regexText = if (looksLikeRegex) {
-                    var tmp = value
-                    if (!tmp.startsWith("^")) tmp = "^$tmp"
-                    if (!tmp.endsWith("$")) tmp += "$"
-                    tmp
-                } else {
-                    val parts = "\\{[^}]+\\}".toRegex().split(value)
-                    val escaped = parts.joinToString(".*") { Regex.escape(it) }
-                    val completed = if (!escaped.startsWith("^")) "^$escaped" else escaped
-                    if (!completed.endsWith("$")) "$completed$" else completed
+                // Kotlin step definitions using cucumber-java8 En API
+                val ktFiles = FilenameIndex.getAllFilesByExt(project, "kt", scope)
+                for (vf in ktFiles) {
+                    val ktFile = psiManager.findFile(vf) as? KtFile ?: continue
+                    val calls = PsiTreeUtil.collectElementsOfType(ktFile, KtCallExpression::class.java)
+                    for (call in calls) {
+                        val name = call.calleeExpression?.text ?: continue
+                        if (name !in listOf("Given", "When", "Then", "And", "But")) continue
+                        val arg = call.valueArguments.firstOrNull()?.getArgumentExpression() as? KtStringTemplateExpression ?: continue
+                        val raw = arg.text
+                        val value = com.intellij.openapi.util.text.StringUtil.unquoteString(raw)
+                        val regexText = buildRegexText(value)
+                        val line = docManager.getDocument(ktFile)?.getLineNumber(call.textOffset)?.plus(1) ?: 1
+                        val className = ktFile.name.substringBeforeLast(".")
+                        val screen = extractScreenName(value)
+                        steps += StepDefinition(
+                            cachedRegex(regexText),
+                            vf.path,
+                            line,
+                            className,
+                            screen
+                        )
+                    }
                 }
-                val line = docManager.getDocument(ktFile)?.getLineNumber(call.textOffset)?.plus(1) ?: 1
-                val className = ktFile.name.substringBeforeLast(".")
-                val screen = extractScreenName(value)
-                steps += StepDefinition(
-                    Regex(regexText, RegexOption.IGNORE_CASE),
-                    vf.path,
-                    line,
-                    className,
-                    screen
-                )
+
+                lastComputed = steps
+
+                // Cache the results only if no invalidation occurred during computation
+                synchronized(cacheLock) {
+                    if (cacheVersion == versionAtStart) {
+                        cachedDefinitions = steps
+                        return steps
+                    }
+                    // Version changed — loop will retry with fresh data
+                }
+            } catch (e: IndexNotReadyException) {
+                return lastComputed
+            } catch (e: Exception) {
+                return lastComputed
             }
-            }
-            
-            // Cache the results for future use
-            cachedDefinitions = steps
-            return steps
-        } catch (e: IndexNotReadyException) {
-            // Indices are not ready, return empty list
-            return emptyList()
-        } catch (e: Exception) {
-            // Handle other exceptions gracefully
-            return emptyList()
         }
+        // Exhausted retries — return last computed result rather than blanking the UI
+        return lastComputed
     }
 
     /**
@@ -300,6 +321,17 @@ class StepSearchService(
         return pattern
     }
 
+    fun countFilteredSteps(
+        classFilter: Set<String>? = null,
+        screenFilter: String? = null
+    ): Int {
+        return getStepDefinitions()
+            .count { def ->
+                (classFilter == null || def.className in classFilter) &&
+                (screenFilter == null || def.screenName == screenFilter)
+            }
+    }
+
     /**
      * Returns true if a step definition exists that matches the given [stepText].
      * This does a simple conversion of cucumber expressions like `{string}` into
@@ -313,5 +345,5 @@ class StepSearchService(
     /**
      * Returns the total number of step definitions in the project.
      */
-    fun countStepDefinitions(): Int = getStepPatterns().size
+    fun countStepDefinitions(): Int = getStepDefinitions().size
 }
