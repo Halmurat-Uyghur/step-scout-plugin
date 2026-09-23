@@ -1,5 +1,5 @@
 <!-- src/main/resources/META-INF/plugin.xml -->
-<idea-plugin version="2">
+<idea-plugin>
     <id>com.stepscout.plugin</id>
     <name>StepScout</name>
     <!-- Version is managed by Gradle (see build.gradle.kts) and patched automatically during build -->

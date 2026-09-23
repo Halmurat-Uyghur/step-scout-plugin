@@ -1,9 +1,9 @@
 # StepScout IntelliJ Plugin
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
-![IDEA: 2025.2](https://img.shields.io/badge/IntelliJ-2025.2-blue?logo=intellij-idea)
+![IDEA: 2025.2+](https://img.shields.io/badge/IntelliJ-2025.2%E2%80%932026.2%2B-blue?logo=intellij-idea)
 ![JDK 21+](https://img.shields.io/badge/JDK-21%2B-4c8c2b?logo=openjdk)
-![Kotlin 2.2](https://img.shields.io/badge/Kotlin-2.2-7F52FF?logo=kotlin)
+![Kotlin 2.4](https://img.shields.io/badge/Kotlin-2.4-7F52FF?logo=kotlin)
 
 This project provides the base structure for an IntelliJ IDEA plugin that assists teams in locating Cucumber step definitions and detecting missing steps in their framework.
 
@@ -17,32 +17,49 @@ Total Features: 46
 
 Below the summary is a list of missing steps and a search box for existing steps.
 
-Use the dropdown next to the search box to filter steps by their definition class.
-Only the simple class names are shown and the dropdown width matches the search field.
-The number of steps in the selected class is shown above the results.
+Use the dropdowns above the search box to filter steps by their definition class or by
+"screen" (the text before a colon in the first word, e.g. `Login: I tap submit`). Only the
+simple class names are shown. Filters are kept when the tool window refreshes.
+
+### What is detected
+
+- Java/Kotlin methods annotated with Cucumber step annotations in any Gherkin language
+  (`io.cucumber.java.*` and legacy `cucumber.api.java.*`), including constant values such as
+  `@Given(PREFIX + "text")`.
+- Kotlin `cucumber-java8` lambdas (`Given("...") { ... }`).
+- Cucumber expressions (`{int}`, `{string}`, `{word}`, custom `{types}`, optional `(s)` text,
+  `a/b` alternation) and regular expressions (patterns anchored with `^` or `$`).
+- Scenario Outline steps are checked against each Examples row.
+
+The tool window does not open automatically; open it from *View ▸ Tool Windows ▸ StepScout*
+or *Tools ▸ Search Steps*. Scans run in the background and restart when files change.
 
 ## Development
 
-The plugin is written primarily in **Kotlin** with supporting utilities in **Java**. It uses Gradle with the `org.jetbrains.intellij.platform` plugin.
+The plugin is written in **Kotlin** and built with Gradle and the
+[IntelliJ Platform Gradle Plugin](https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html) 2.x.
 
 ### Prerequisites
 
 - JDK 21
-- IntelliJ IDEA 2025.1 (Community Edition is sufficient)
-- Gradle 8.14 or the provided wrapper.
+- The provided Gradle wrapper (Gradle 9.7)
 
-If `gradle/wrapper/gradle-wrapper.jar` is missing, generate it by running `gradle wrapper` once.
+The build compiles and tests against IntelliJ IDEA 2026.2.3 and supports 2025.2 and newer
+(`since-build` 252, no upper bound). Override the target with `-Pstepscout.ideaVersion=...`,
+and the matching Gherkin / Cucumber for Java plugin versions with
+`-Pstepscout.gherkinVersion=...` / `-Pstepscout.cucumberJavaVersion=...`.
 
 ### Useful Gradle tasks
 
-- `./gradlew build` – builds the plugin
+- `./gradlew build` – builds the plugin and runs unit and platform tests
+- `./gradlew verifyPlugin` – runs the IntelliJ Plugin Verifier against IntelliJ IDEA 2025.2 and 2026.2
 - `./gradlew runIde` – launches a development instance of IntelliJ IDEA with the plugin
 
 ## Configuration
 
-Excluded feature files can be listed at the project level. The paths are persisted
-to `.idea/stepscout.xml` and can be edited via the **StepScout** configurable
-under *File ▸ Settings* (or *Preferences* on macOS).
+Excluded paths can be listed at the project level. Any feature file or step definition whose
+path contains one of the entries is skipped. The paths are persisted to `.idea/stepscout.xml`
+and can be edited under *Settings ▸ Tools ▸ StepScout*.
 
 ## Maintainer / Contact
 

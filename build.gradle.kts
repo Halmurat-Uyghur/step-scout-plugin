@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.stepscout"
-version = "1.1.4"
+version = "1.2.0"
 
 repositories {
     mavenCentral()
@@ -71,10 +71,11 @@ intellijPlatform {
             <ul>
               <li><b>Compatibility:</b> IntelliJ IDEA 2025.2 through 2026.2 and later.</li>
               <li><b>Fixed:</b> a single step using optional text such as <code>cucumber(s)</code> no longer hides every step definition.</li>
-              <li><b>Fixed:</b> Cucumber expressions now match like Cucumber: typed parameters, optional text, alternation and escapes.</li>
+              <li><b>Fixed:</b> Cucumber expressions now match like Cucumber: typed parameters, optional text, alternation and escapes; <code>/regex/</code> patterns are supported.</li>
               <li><b>Fixed:</b> Scenario Outline steps are checked against their Examples values instead of being reported missing.</li>
               <li><b>Fixed:</b> Kotlin regex step definitions, constant annotation values and non-English step annotations are recognised.</li>
               <li><b>Fixed:</b> Background blocks are no longer counted as scenarios; filters survive refreshes; library steps can be opened.</li>
+              <li><b>Fixed:</b> searching for text with punctuation such as <code>log-in</code> or <code>{int}</code> now finds steps.</li>
               <li><b>Performance:</b> cached, cancellable background scans that no longer block typing or rescan on unrelated file changes.</li>
               <li><b>Changed:</b> the tool window no longer opens automatically in every project; settings moved to Tools &gt; StepScout.</li>
             </ul>
