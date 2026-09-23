@@ -21,6 +21,8 @@ repositories {
         // Bundled with the IDE
         bundledPlugin("com.intellij.java")
         bundledPlugin("org.jetbrains.kotlin")
+        // Required by the Gherkin plugin; without it Gherkin (and StepScout) fail to load in tests.
+        bundledPlugin("org.intellij.intelliLang")
 
         // Marketplace plug-ins (parametrized for easy bumping)
         // Defaults aligned to IDEA 2025.2 (252.*); override via -Pstepscout.gherkinVersion / -Pstepscout.cucumberJavaVersion
@@ -31,11 +33,10 @@ repositories {
 
         // Test framework for IntelliJ Platform - excludes conflicting coroutines dependencies
         testFramework(TestFrameworkType.Platform)
+        testFramework(TestFrameworkType.Plugin.Java)
         }
-    testImplementation(kotlin("test"))
-    testImplementation("io.mockk:mockk:1.13.9") {
-        exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-core")
-    }
+    testImplementation(kotlin("test-junit"))
+    testImplementation("junit:junit:4.13.2")
 }
 
 kotlin { jvmToolchain(21) }
@@ -100,5 +101,5 @@ tasks.patchPluginXml {
 }
 
 tasks.test {
-    useJUnitPlatform()
+    useJUnit()
 }

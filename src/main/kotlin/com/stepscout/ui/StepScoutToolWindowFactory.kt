@@ -63,8 +63,8 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
     private val defaultIcon = IconLoader.getIcon("/icons/pluginIconSmall.svg", StepScoutToolWindowFactory::class.java)
     
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        val searchService = StepSearchService(project)
-        val missingService = MissingStepService(project, searchService)
+        val searchService = StepSearchService.getInstance(project)
+        val missingService = MissingStepService.getInstance(project)
 
         // base icon is configured in plugin.xml
         val missingLabel = JLabel("Missing Steps")
@@ -102,10 +102,11 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
                         if (project.isDisposed) return@compute Stats(emptyList(), 0, 0, 0, emptyMap(), emptyMap())
                         
                         try {
-                            val missing = missingService.findMissingSteps()
+                            val scan = missingService.scanFeatures()
+                            val missing = scan.missingSteps
                             val stepCount = searchService.countStepDefinitions()
-                            val featureCount = missingService.countFeatureFiles()
-                            val scenarioCount = missingService.countScenarios()
+                            val featureCount = scan.featureCount
+                            val scenarioCount = scan.scenarioCount
                             val classData = searchService.getStepClasses()
                             val screenData = searchService.getScreenNames()
                             
@@ -194,7 +195,7 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
                     val idx = missingList.locationToIndex(e.point)
                     if (idx >= 0 && idx < missingSteps.size) {
                         val step = missingSteps[idx]
-                        val vf = VirtualFileManager.getInstance().findFileByUrl("file://${step.filePath}")
+                        val vf = VirtualFileManager.getInstance().findFileByUrl(step.fileUrl)
                         if (vf != null) {
                             OpenFileDescriptor(project, vf, step.lineNumber - 1, 0).navigate(true)
                         }
@@ -311,7 +312,7 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
                     val idx = resultList.locationToIndex(e.point)
                     if (idx >= 0 && idx < stepResults.size) {
                         val step = stepResults[idx]
-                        val vf = VirtualFileManager.getInstance().findFileByUrl("file://${step.filePath}")
+                        val vf = VirtualFileManager.getInstance().findFileByUrl(step.fileUrl)
                         if (vf != null) {
                             OpenFileDescriptor(project, vf, step.lineNumber - 1, 0).navigate(true)
                         }
@@ -377,8 +378,6 @@ class StepScoutToolWindowFactory : ToolWindowFactory, DumbAware {
             com.intellij.openapi.vfs.VirtualFileManager.VFS_CHANGES,
             object : com.intellij.openapi.vfs.newvfs.BulkFileListener {
                 override fun after(events: MutableList<out com.intellij.openapi.vfs.newvfs.events.VFileEvent>) {
-                    // Invalidate cache when files change
-                    searchService.invalidateCache()
                     DumbService.getInstance(project).runWhenSmart {
                         refresh() // This will update both UI content and icon
                     }
