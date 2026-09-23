@@ -1,9 +1,15 @@
 package com.stepscout.ui
 
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.ActionPlaces
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
+import com.intellij.openapi.options.ShowSettingsUtil
+import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.IconLoader
@@ -13,6 +19,7 @@ import com.intellij.openapi.vfs.newvfs.events.VFileCreateEvent
 import com.intellij.openapi.vfs.newvfs.events.VFileEvent
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.ui.DocumentAdapter
+import com.intellij.ui.OnePixelSplitter
 import com.intellij.ui.SearchTextField
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
@@ -23,6 +30,7 @@ import com.stepscout.services.MissingStep
 import com.stepscout.services.MissingStepService
 import com.stepscout.services.StepResult
 import com.stepscout.services.StepSearchService
+import com.stepscout.settings.StepScoutConfigurable
 import com.stepscout.settings.StepScoutSettingsListener
 import java.awt.BorderLayout
 import java.awt.GridLayout
@@ -35,7 +43,6 @@ import javax.swing.JComboBox
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JPanel
-import javax.swing.JSplitPane
 import javax.swing.event.DocumentEvent
 
 private data class Stats(
@@ -58,13 +65,14 @@ internal class StepScoutPanel(private val project: Project, private val toolWind
     private val disposable = toolWindow.disposable
     private val defaultIcon = IconLoader.getIcon("/icons/pluginIconSmall.svg", StepScoutPanel::class.java)
     private val refreshAlarm = Alarm(disposable)
+    private val searchAlarm = Alarm(disposable)
 
     // Coalescing keys: a newer request of the same kind cancels the one in flight.
     private val refreshKey = Any()
     private val searchKey = Any()
 
     private val missingLabel = JLabel("Missing Steps")
-    private val statsLabel = JLabel("")
+    private val statsLabel = JLabel("Scenarios: –  |  Steps: –  |  Features: –")
     private val countLabel = JLabel("")
     private val classDropdown = JComboBox<String>().apply { prototypeDisplayValue = "All Classes (999)" }
     private val screenDropdown = JComboBox<String>().apply { prototypeDisplayValue = "All Screens (999)" }
@@ -156,8 +164,7 @@ internal class StepScoutPanel(private val project: Project, private val toolWind
         missingListModel.clear()
         missingListModel.addAll(stats.missing.map { "${it.text} - ${fileName(it.filePath)}:${it.lineNumber}" })
         missingLabel.text = "Missing ${stats.missing.size} Steps"
-        statsLabel.text = "<html>Total Scenarios: ${stats.scenarioCount}<br>Steps: ${stats.stepCount}" +
-            "<br>Features: ${stats.featureCount}</html>"
+        statsLabel.text = "Scenarios: ${stats.scenarioCount}  |  Steps: ${stats.stepCount}  |  Features: ${stats.featureCount}"
         toolWindow.setIcon(if (stats.missing.isNotEmpty()) AllIcons.General.Error else defaultIcon)
 
         updateResults()
@@ -194,6 +201,13 @@ internal class StepScoutPanel(private val project: Project, private val toolWind
         }
     }
 
+    /** Debounces typing so a search runs once the user pauses. */
+    private fun scheduleSearch() {
+        if (searchAlarm.isDisposed) return
+        searchAlarm.cancelAllRequests()
+        searchAlarm.addRequest(::updateResults, SEARCH_DELAY_MS)
+    }
+
     private fun updateResults() {
         val query = searchField.text
         val classFilter = selectedClass?.let { displayToFull[it] }
@@ -224,7 +238,7 @@ internal class StepScoutPanel(private val project: Project, private val toolWind
 
     private fun installListeners() {
         searchField.addDocumentListener(object : DocumentAdapter() {
-            override fun textChanged(e: DocumentEvent) = updateResults()
+            override fun textChanged(e: DocumentEvent) = scheduleSearch()
         })
 
         classDropdown.addActionListener {
@@ -281,8 +295,13 @@ internal class StepScoutPanel(private val project: Project, private val toolWind
     private fun fileName(path: String): String = path.substringAfterLast('/').substringAfterLast('\\')
 
     private fun buildLayout(): JComponent {
-        val refreshButton = JButton("Refresh").apply { addActionListener { refresh() } }
-        val clearButton = JButton("Clear All").apply { addActionListener { clearFilters() } }
+        val clearButton = JButton(AllIcons.Actions.Rollback).apply {
+            toolTipText = "Reset all filters"
+            isBorderPainted = false
+            isContentAreaFilled = false
+            isFocusPainted = false
+            addActionListener { clearFilters() }
+        }
 
         val missingPanel = JPanel(BorderLayout()).apply {
             border = JBUI.Borders.emptyBottom(4)
@@ -290,10 +309,14 @@ internal class StepScoutPanel(private val project: Project, private val toolWind
             add(JBScrollPane(missingList), BorderLayout.CENTER)
         }
 
-        val dropdownPanel = JPanel(GridLayout(1, 3, 4, 0)).apply {
+        val dropdownRow = JPanel(GridLayout(1, 2, 4, 0)).apply {
             add(classDropdown)
             add(screenDropdown)
-            add(clearButton)
+        }
+
+        val dropdownPanel = JPanel(BorderLayout(4, 0)).apply {
+            add(dropdownRow, BorderLayout.CENTER)
+            add(clearButton, BorderLayout.EAST)
         }
 
         val searchPanel = JPanel(GridLayout(2, 1, 0, 4)).apply {
@@ -311,14 +334,18 @@ internal class StepScoutPanel(private val project: Project, private val toolWind
             add(JBScrollPane(resultList), BorderLayout.CENTER)
         }
 
-        val splitPane = JSplitPane(JSplitPane.VERTICAL_SPLIT, missingPanel, bottomPanel).apply {
-            resizeWeight = 0.5
-            dividerSize = 4
+        val splitPane = OnePixelSplitter(true, 0.5f).apply {
+            firstComponent = missingPanel
+            secondComponent = bottomPanel
         }
+
+        val toolbar = ActionManager.getInstance()
+            .createActionToolbar(ActionPlaces.TOOLWINDOW_CONTENT, createToolbarActions(), true)
+        toolbar.targetComponent = splitPane
 
         val topPanel = JPanel(BorderLayout()).apply {
             add(statsLabel, BorderLayout.CENTER)
-            add(refreshButton, BorderLayout.EAST)
+            add(toolbar.component, BorderLayout.EAST)
         }
 
         return JPanel(BorderLayout()).apply {
@@ -328,8 +355,20 @@ internal class StepScoutPanel(private val project: Project, private val toolWind
         }
     }
 
+    private fun createToolbarActions() = DefaultActionGroup(
+        object : DumbAwareAction("Refresh", "Refresh step definitions and missing steps", AllIcons.Actions.Refresh) {
+            override fun actionPerformed(e: AnActionEvent) = refresh()
+        },
+        object : DumbAwareAction("Settings", "StepScout settings (exclude paths)", AllIcons.General.Settings) {
+            override fun actionPerformed(e: AnActionEvent) {
+                ShowSettingsUtil.getInstance().showSettingsDialog(project, StepScoutConfigurable::class.java)
+            }
+        }
+    )
+
     private companion object {
         const val REFRESH_DELAY_MS = 500L
+        const val SEARCH_DELAY_MS = 200L
         val RELEVANT_EXTENSIONS = listOf(".feature", ".java", ".kt")
     }
 }

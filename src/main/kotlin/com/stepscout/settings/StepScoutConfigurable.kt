@@ -3,7 +3,8 @@ package com.stepscout.settings
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBScrollPane
-import javax.swing.BoxLayout
+import com.intellij.util.ui.JBUI
+import java.awt.BorderLayout
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JPanel
@@ -14,10 +15,9 @@ class StepScoutConfigurable(private val project: Project) : Configurable {
     private val textarea = JTextArea(5, 40)
 
     override fun createComponent(): JComponent {
-        return component ?: JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            add(JLabel("Exclude paths (one per line):"))
-            add(JBScrollPane(textarea))
+        return component ?: JPanel(BorderLayout()).apply {
+            add(JLabel("Exclude paths (one per line):").apply { border = JBUI.Borders.emptyBottom(4) }, BorderLayout.NORTH)
+            add(JBScrollPane(textarea), BorderLayout.CENTER)
             component = this
         }
     }
