@@ -298,6 +298,7 @@ internal class StepScoutPanel(private val project: Project, private val toolWind
     private fun buildLayout(): JComponent {
         val clearButton = JButton(AllIcons.Actions.Rollback).apply {
             toolTipText = "Reset all filters"
+            accessibleContext.accessibleName = "Reset all filters"
             isBorderPainted = false
             isContentAreaFilled = false
             isFocusPainted = false
