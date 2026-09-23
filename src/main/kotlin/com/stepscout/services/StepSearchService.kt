@@ -21,6 +21,7 @@ import com.intellij.psi.util.CachedValueProvider
 import com.intellij.psi.util.CachedValuesManager
 import com.intellij.psi.util.PsiModificationTracker
 import com.intellij.psi.util.PsiTreeUtil
+import com.intellij.util.Processor
 import com.stepscout.settings.StepScoutSettings
 import org.jetbrains.kotlin.psi.KtCallExpression
 import org.jetbrains.kotlin.psi.KtEscapeStringTemplateEntry
@@ -81,14 +82,15 @@ class StepSearchService(private val project: Project) {
 
         for ((annotationFqn, legacy) in findStepAnnotationClasses(facade, scope)) {
             val annotationClass = facade.findClass(annotationFqn, scope) ?: continue
-            AnnotatedElementsSearch.searchPsiMethods(annotationClass, scope).forEach { method ->
+            // Stream results through a Processor rather than collecting them all first.
+            AnnotatedElementsSearch.searchPsiMethods(annotationClass, scope).forEach(Processor { method ->
                 ProgressManager.checkCanceled()
                 // A method can carry several (repeated) step annotations.
                 method.modifierList.annotations
                     .filter { it.qualifiedName == annotationFqn }
                     .forEach { annotation -> addAnnotatedDefinition(method, annotation, legacy, into) }
                 true
-            }
+            })
         }
     }
 
@@ -100,10 +102,10 @@ class StepSearchService(private val project: Project) {
         val result = linkedMapOf<String, Boolean>()
         for ((metaAnnotation, legacy) in STEP_META_ANNOTATIONS) {
             val meta = facade.findClass(metaAnnotation, scope) ?: continue
-            AnnotatedElementsSearch.searchPsiClasses(meta, scope).forEach { cls ->
+            AnnotatedElementsSearch.searchPsiClasses(meta, scope).forEach(Processor { cls ->
                 cls.qualifiedName?.let { result[it] = legacy }
                 true
-            }
+            })
         }
         for (fqn in ENGLISH_ANNOTATIONS) {
             result.putIfAbsent(fqn, fqn.startsWith(LEGACY_PACKAGE))

@@ -1,6 +1,6 @@
 package com.stepscout.services
 
-import com.intellij.openapi.application.runReadAction
+import com.intellij.openapi.application.runReadActionBlocking
 import com.intellij.openapi.projectRoots.JavaSdk
 import com.intellij.testFramework.LightProjectDescriptor
 import com.intellij.testFramework.fixtures.DefaultLightProjectDescriptor
@@ -68,7 +68,7 @@ class StepScoutPlatformTest : LightJavaCodeInsightFixtureTestCase() {
         )
     }
 
-    private fun definitions() = runReadAction { StepSearchService.getInstance(project).getStepDefinitions() }
+    private fun definitions() = runReadActionBlocking { StepSearchService.getInstance(project).getStepDefinitions() }
 
     fun testDiscoversJavaAndKotlinDefinitions() {
         val expressions = definitions().map { it.expression }.toSet()
@@ -83,8 +83,8 @@ class StepScoutPlatformTest : LightJavaCodeInsightFixtureTestCase() {
 
     fun testScreenNamesAndClasses() {
         val service = StepSearchService.getInstance(project)
-        assertEquals(1, runReadAction { service.getScreenNames() }["Login"])
-        assertEquals(5, runReadAction { service.getStepClasses() }["steps.LoginSteps"])
+        assertEquals(1, runReadActionBlocking { service.getScreenNames() }["Login"])
+        assertEquals(5, runReadActionBlocking { service.getStepClasses() }["steps.LoginSteps"])
     }
 
     fun testFindsMissingStepsAndCountsScenarios() {
@@ -116,7 +116,7 @@ class StepScoutPlatformTest : LightJavaCodeInsightFixtureTestCase() {
             """.trimIndent()
         )
 
-        val scan = runReadAction { MissingStepService.getInstance(project).scanFeatures() }
+        val scan = runReadActionBlocking { MissingStepService.getInstance(project).scanFeatures() }
 
         assertEquals(1, scan.featureCount)
         // Two plain scenarios + two example rows; the Background is not a scenario.
@@ -132,7 +132,7 @@ class StepScoutPlatformTest : LightJavaCodeInsightFixtureTestCase() {
         myFixture.addFileToProject("excluded/skip.feature", "Feature: Skip\n  Scenario: S\n    Given nothing matches\n")
         StepScoutSettings.getInstance(project).excludePaths = mutableListOf("excluded/")
         try {
-            val scan = runReadAction { MissingStepService.getInstance(project).scanFeatures() }
+            val scan = runReadActionBlocking { MissingStepService.getInstance(project).scanFeatures() }
             assertEquals(0, scan.featureCount)
             assertTrue(scan.missingSteps.isEmpty())
         } finally {

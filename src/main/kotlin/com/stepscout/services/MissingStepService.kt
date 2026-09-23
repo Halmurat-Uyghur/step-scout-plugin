@@ -58,7 +58,7 @@ class MissingStepService(private val project: Project) {
                 val rows = (holder as? GherkinScenarioOutline)?.let { exampleRows(it) }.orEmpty()
 
                 for (step in holder.steps) {
-                    val stepText = step.name?.trim() ?: continue
+                    val stepText = step.name.trim()
                     val candidates = if (rows.isEmpty()) listOf(stepText) else rows.map { substitute(stepText, it) }
                     if (candidates.all { isDefined(it) }) continue
 
