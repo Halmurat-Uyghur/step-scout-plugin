@@ -31,7 +31,10 @@ object StepPatternCompiler {
      *   `cucumber.api` annotations (Cucumber-JVM < 3) only understood regular expressions.
      */
     fun compile(pattern: String, forceRegex: Boolean = false): Regex? {
-        val regexText = if (forceRegex || isRegularExpression(pattern)) {
+        val regexText = if (isSlashDelimited(pattern)) {
+            // Cucumber treats /.../ as a regular expression and matches it against the whole step.
+            "^" + pattern.substring(1, pattern.length - 1) + "$"
+        } else if (forceRegex || isRegularExpression(pattern)) {
             anchor(pattern)
         } else {
             "^" + expressionToRegex(pattern) + "$"
@@ -43,9 +46,15 @@ object StepPatternCompiler {
         }
     }
 
-    /** Cucumber treats a pattern as a regular expression when it is anchored with `^` or `$`. */
+    /**
+     * Cucumber treats a pattern as a regular expression when it is anchored with `^` or `$`,
+     * or delimited with slashes (`/.../`).
+     */
     fun isRegularExpression(pattern: String): Boolean =
-        pattern.startsWith("^") || pattern.endsWith("$")
+        pattern.startsWith("^") || pattern.endsWith("$") || isSlashDelimited(pattern)
+
+    private fun isSlashDelimited(pattern: String): Boolean =
+        pattern.length >= 2 && pattern.startsWith("/") && pattern.endsWith("/")
 
     private fun anchor(pattern: String): String {
         var text = pattern
@@ -63,7 +72,9 @@ object StepPatternCompiler {
     fun expressionToRegex(expression: String): String {
         val out = StringBuilder()
         // Alternation is scoped to whitespace-delimited chunks, so convert chunk by chunk.
+        // Whitespace inside optional text, e.g. "the( home) page", does not end a chunk.
         var i = 0
+        var depth = 0
         val chunk = StringBuilder()
         while (i < expression.length) {
             val c = expression[i]
@@ -72,7 +83,11 @@ object StepPatternCompiler {
                 i += 2
                 continue
             }
-            if (c.isWhitespace()) {
+            when (c) {
+                '(' -> depth++
+                ')' -> if (depth > 0) depth--
+            }
+            if (c.isWhitespace() && depth == 0) {
                 out.append(convertChunk(chunk.toString()))
                 chunk.clear()
                 out.append(Regex.escape(c.toString()))
@@ -85,10 +100,10 @@ object StepPatternCompiler {
         return out.toString()
     }
 
-    /** Converts a chunk that contains no whitespace, handling `a/b` alternation. */
+    /** Converts a chunk with no top-level whitespace, handling `a/b` alternation. */
     private fun convertChunk(chunk: String): String {
         if (chunk.isEmpty()) return ""
-        val alternatives = splitUnescaped(chunk, '/')
+        val alternatives = splitTopLevel(chunk, '/')
         if (alternatives.size == 1) return convertTerm(chunk)
         return alternatives.joinToString("|", prefix = "(?:", postfix = ")") { convertTerm(it) }
     }
@@ -146,9 +161,11 @@ object StepPatternCompiler {
         return out.toString()
     }
 
-    private fun splitUnescaped(text: String, separator: Char): List<String> {
+    /** Splits on unescaped [separator]s that are not inside `(...)` or `{...}`. */
+    private fun splitTopLevel(text: String, separator: Char): List<String> {
         val parts = mutableListOf<String>()
         val current = StringBuilder()
+        var depth = 0
         var i = 0
         while (i < text.length) {
             val c = text[i]
@@ -157,7 +174,11 @@ object StepPatternCompiler {
                 i += 2
                 continue
             }
-            if (c == separator) {
+            when (c) {
+                '(', '{' -> depth++
+                ')', '}' -> if (depth > 0) depth--
+            }
+            if (c == separator && depth == 0) {
                 parts += current.toString()
                 current.clear()
             } else {

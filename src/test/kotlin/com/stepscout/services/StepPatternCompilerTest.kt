@@ -41,6 +41,26 @@ class StepPatternCompilerTest {
     }
 
     @Test
+    fun optionalTextMayContainWhitespace() {
+        assertTrue(matches("I am on the( home) page", "I am on the home page"))
+        assertTrue(matches("I am on the( home) page", "I am on the page"))
+        assertTrue(matches("(the )user logs in", "user logs in"))
+        assertTrue(matches("(the )user logs in", "the user logs in"))
+    }
+
+    @Test
+    fun alternationWithOptionalText() {
+        assertTrue(matches("I have {int} cucumber(s) in my belly/stomach", "I have 1 cucumber in my stomach"))
+        assertTrue(matches("I have {int} cucumber(s) in my belly/stomach", "I have 2 cucumbers in my belly"))
+    }
+
+    @Test
+    fun slashDelimitedPatternsAreRegularExpressions() {
+        assertTrue(matches("/I have (\\d+) cukes/", "I have 7 cukes"))
+        assertFalse(matches("/I have (\\d+) cukes/", "I have x cukes"))
+    }
+
+    @Test
     fun alternation() {
         assertTrue(matches("I click/tap the button", "I click the button"))
         assertTrue(matches("I click/tap the button", "I tap the button"))
