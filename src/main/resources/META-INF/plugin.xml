@@ -77,7 +77,7 @@
                     anchor="right"
                     factoryClass="com.stepscout.ui.StepScoutToolWindowFactory"
                     icon="/icons/pluginIconSmall.svg"
-                    doNotActivateOnStart="false"/>
+                    doNotActivateOnStart="true"/>
         <projectConfigurable id="com.stepscout.settings"
                              parentId="tools"
                              instance="com.stepscout.settings.StepScoutConfigurable"
