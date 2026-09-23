@@ -57,6 +57,15 @@ class StepMatcherTest {
     }
 
     @Test
+    fun queriesWithPunctuationMatch() {
+        val defs = listOf(def("I log-in as admin"), def("I have {int} cukes"), def("Login: I tap submit"))
+        // "log-in" also fuzzily matches "Login:", but the exact match ranks first.
+        assertEquals("I log-in as admin", StepMatcher.findSteps(defs, "log-in").first().text)
+        assertEquals(listOf("I have {int} cukes"), StepMatcher.findSteps(defs, "{int}").map { it.text })
+        assertEquals(listOf("Login: I tap submit"), StepMatcher.findSteps(defs, "Login:").map { it.text })
+    }
+
+    @Test
     fun nonMatchingQueryReturnsNothing() {
         assertTrue(StepMatcher.findSteps(listOf(def("I login")), "checkout").isEmpty())
     }
@@ -66,5 +75,6 @@ class StepMatcherTest {
         assertEquals("Login", StepMatcher.extractScreenName("Login: I tap submit"))
         assertEquals("", StepMatcher.extractScreenName("the time is 12:00"))
         assertEquals("", StepMatcher.extractScreenName(":leading colon"))
+        assertEquals("Login", StepMatcher.extractScreenName("^Login: I open the app$"))
     }
 }

@@ -49,10 +49,12 @@ object StepMatcher {
     }
 
     /**
-     * Returns the screen prefix of a step, i.e. the text before a colon in the first word
+     * Returns the screen prefix of a step pattern, i.e. the text before a colon in the first word
      * (`"Login: I tap submit"` → `"Login"`). Times like `"at 12:00"` are not treated as screens.
      */
-    fun extractScreenName(text: String): String {
+    fun extractScreenName(pattern: String): String {
+        // Ignore regex delimiters so "^Login: ..." and "Login: ..." share a screen.
+        val text = pattern.removePrefix("^").removePrefix("/")
         val colon = text.indexOf(':')
         if (colon <= 0) return ""
         val firstSpace = text.indexOf(' ')
@@ -64,10 +66,12 @@ object StepMatcher {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return emptyList()
 
+        // Tokens are compared against the alphanumeric words of each step, so drop punctuation
+        // (e.g. "log-in", "{int}", "Login:") the same way.
         val split = trimmed.split(WHITESPACE)
             .flatMap { it.split(CAMEL_CASE_BOUNDARY) }
-            .map { it.lowercase() }
-            .filter { it.isNotBlank() }
+            .flatMap { it.lowercase().split(NON_ALPHANUMERIC) }
+            .filter { it.isNotEmpty() }
 
         if (split.size == 1 && split[0].startsWith("user") && split[0].length > 4) {
             return listOf("user", split[0].substring(4))
