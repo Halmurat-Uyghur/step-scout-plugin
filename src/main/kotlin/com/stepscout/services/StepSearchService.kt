@@ -1,317 +1,266 @@
 package com.stepscout.services
 
-import com.intellij.openapi.project.Project
+import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.service
+import com.intellij.openapi.diagnostic.ControlFlowException
+import com.intellij.openapi.diagnostic.logger
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.DumbService
-import com.intellij.openapi.project.IndexNotReadyException
+import com.intellij.openapi.project.Project
+import com.intellij.lang.java.JavaLanguage
+import com.intellij.openapi.roots.ProjectRootModificationTracker
+import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.psi.JavaPsiFacade
+import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiDocumentManager
-import com.intellij.psi.PsiManager
-import com.intellij.psi.search.FilenameIndex
+import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiFile
+import com.intellij.psi.PsiMethod
 import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.psi.search.PsiSearchHelper
 import com.intellij.psi.search.searches.AnnotatedElementsSearch
+import com.intellij.psi.util.CachedValue
+import com.intellij.psi.util.CachedValueProvider
+import com.intellij.psi.util.CachedValuesManager
+import com.intellij.psi.util.PsiModificationTracker
 import com.intellij.psi.util.PsiTreeUtil
+import com.intellij.util.Processor
+import com.stepscout.settings.StepScoutSettings
+import org.jetbrains.kotlin.idea.KotlinLanguage
 import org.jetbrains.kotlin.psi.KtCallExpression
+import org.jetbrains.kotlin.psi.KtEscapeStringTemplateEntry
 import org.jetbrains.kotlin.psi.KtFile
+import org.jetbrains.kotlin.psi.KtLiteralStringTemplateEntry
 import org.jetbrains.kotlin.psi.KtStringTemplateExpression
 
-data class StepDefinition(
-    val regex: Regex,
-    val filePath: String,
-    val lineNumber: Int,
-    val className: String,
-    val screenName: String
-)
-
-data class StepResult(val text: String, val filePath: String, val lineNumber: Int)
-
-class StepSearchService(
-    private val project: Project,
-    private val testDefinitions: List<StepDefinition>? = null
-) {
-    
-    // Cache for expensive PSI operations
-    @Volatile
-    private var cachedDefinitions: List<StepDefinition>? = null
-    
-    // Simple cache invalidation - clear on any file change
-    fun invalidateCache() {
-        cachedDefinitions = null
-    }
-
-    private fun extractScreenName(text: String): String {
-        val colon = text.indexOf(':')
-        if (colon <= 0) return ""
-
-        // The screen name must appear before the first space to avoid
-        // misinterpreting times like "12:00" as a screen name
-        val firstSpace = text.indexOf(' ')
-        if (firstSpace != -1 && colon > firstSpace) return ""
-
-        return text.substring(0, colon).trim()
-    }
-
-    // Support both modern io.cucumber and legacy cucumber.api annotation packages
-    private val stepAnnotations = listOf(
-        "io.cucumber.java.en.Given",
-        "io.cucumber.java.en.When",
-        "io.cucumber.java.en.Then",
-        "io.cucumber.java.en.And",
-        "io.cucumber.java.en.But",
-        "cucumber.api.java.en.Given",
-        "cucumber.api.java.en.When",
-        "cucumber.api.java.en.Then",
-        "cucumber.api.java.en.And",
-        "cucumber.api.java.en.But"
-    )
+/**
+ * Discovers Cucumber step definitions in Java (annotations) and Kotlin (cucumber-java8 lambdas).
+ *
+ * Results are cached until PSI changes, so repeated searches and refreshes are cheap.
+ * All methods must be called inside a read action.
+ */
+@Service(Service.Level.PROJECT)
+class StepSearchService(private val project: Project) {
 
     /**
-     * Returns all step definitions in the project along with their locations.
+     * Step definitions only live in Java and Kotlin, so edits to feature files or other languages
+     * do not invalidate them. File creation/deletion, library changes and exclusion settings do.
+     */
+    private val definitionsCache: CachedValue<List<StepDefinition>> =
+        CachedValuesManager.getManager(project).createCachedValue {
+            CachedValueProvider.Result.create(
+                computeStepDefinitions(),
+                PsiModificationTracker.getInstance(project).forLanguages { language ->
+                    language.isKindOf(JavaLanguage.INSTANCE) || language.isKindOf(KotlinLanguage.INSTANCE)
+                },
+                VirtualFileManager.VFS_STRUCTURE_MODIFICATIONS,
+                ProjectRootModificationTracker.getInstance(project),
+                StepScoutSettings.getInstance(project).modificationTracker
+            )
+        }
+
+    /**
+     * Step annotation classes (one per keyword and Gherkin language, ~350 in cucumber-java) come
+     * from libraries, so they only need to be searched again when dependencies or files change.
+     */
+    private val annotationClassesCache: CachedValue<Map<String, Boolean>> =
+        CachedValuesManager.getManager(project).createCachedValue {
+            CachedValueProvider.Result.create(
+                findStepAnnotationClasses(),
+                VirtualFileManager.VFS_STRUCTURE_MODIFICATIONS,
+                ProjectRootModificationTracker.getInstance(project)
+            )
+        }
+
+    /**
+     * Returns all step definitions in the project and its libraries. Returns an empty list while
+     * indexes are not ready.
      */
     fun getStepDefinitions(): List<StepDefinition> {
-        if (testDefinitions != null) return testDefinitions
-        
-        // Return cached result if available
-        cachedDefinitions?.let { return it }
-        
-        // Check if project is disposed or indices are not ready
-        if (project.isDisposed || DumbService.getInstance(project).isDumb) {
-            return emptyList()
+        if (project.isDisposed || DumbService.isDumb(project)) return emptyList()
+        return definitionsCache.value
+    }
+
+    fun findSteps(query: String, classFilter: Set<String>? = null, screenFilter: String? = null): List<StepResult> =
+        StepMatcher.findSteps(getStepDefinitions(), query, classFilter, screenFilter)
+
+    fun getStepClasses(): Map<String, Int> = getStepDefinitions().groupingBy { it.className }.eachCount()
+
+    fun getScreenNames(): Map<String, Int> = getStepDefinitions()
+        .filter { it.screenName.isNotBlank() }
+        .groupingBy { it.screenName }
+        .eachCount()
+
+    fun countStepDefinitions(): Int = getStepDefinitions().size
+
+    private fun computeStepDefinitions(): List<StepDefinition> {
+        val settings = StepScoutSettings.getInstance(project)
+        val steps = mutableListOf<StepDefinition>()
+        collectAnnotatedDefinitions(steps)
+        collectKotlinLambdaDefinitions(steps)
+        return steps.filterNot { settings.isExcluded(it.filePath) }
+    }
+
+    private fun collectAnnotatedDefinitions(into: MutableList<StepDefinition>) {
+        val scope = GlobalSearchScope.allScope(project)
+        val facade = JavaPsiFacade.getInstance(project)
+
+        for ((annotationFqn, legacy) in annotationClassesCache.value) {
+            val annotationClass = facade.findClass(annotationFqn, scope) ?: continue
+            // Stream results through a Processor rather than collecting them all first.
+            AnnotatedElementsSearch.searchPsiMethods(annotationClass, scope).forEach(Processor { method ->
+                ProgressManager.checkCanceled()
+                // A method can carry several (repeated) step annotations.
+                method.modifierList.annotations
+                    .filter { it.qualifiedName == annotationFqn }
+                    .forEach { annotation -> addAnnotatedDefinition(method, annotation, legacy, into) }
+                true
+            })
         }
-        
-        try {
-            val scope = GlobalSearchScope.allScope(project)
-            val facade = JavaPsiFacade.getInstance(project)
-            val psiManager = PsiManager.getInstance(project)
-            val docManager = PsiDocumentManager.getInstance(project)
+    }
 
-            val steps = mutableListOf<StepDefinition>()
+    /**
+     * Returns the fully-qualified names of all step annotations (every Gherkin language), mapped to
+     * whether they belong to the legacy `cucumber.api` package, which only supports regular expressions.
+     */
+    private fun findStepAnnotationClasses(): Map<String, Boolean> {
+        val scope = GlobalSearchScope.allScope(project)
+        val facade = JavaPsiFacade.getInstance(project)
+        val result = linkedMapOf<String, Boolean>()
+        for ((metaAnnotation, legacy) in STEP_META_ANNOTATIONS) {
+            val meta = facade.findClass(metaAnnotation, scope) ?: continue
+            AnnotatedElementsSearch.searchPsiClasses(meta, scope).forEach(Processor { cls ->
+                cls.qualifiedName?.let { result[it] = legacy }
+                true
+            })
+        }
+        for (fqn in ENGLISH_ANNOTATIONS) {
+            result.putIfAbsent(fqn, fqn.startsWith(LEGACY_PACKAGE))
+        }
+        return result
+    }
 
-        for (fqName in stepAnnotations) {
-            val clazz = facade.findClass(fqName, scope) ?: continue
-            val methods = AnnotatedElementsSearch.searchPsiMethods(clazz, scope).findAll()
-            for (method in methods) {
-                val annotation = method.getAnnotation(fqName)
-                val rawValue = annotation?.findAttributeValue("value")?.text ?: ""
-                val unquoted = com.intellij.openapi.util.text.StringUtil.unquoteString(rawValue)
-                val value = com.intellij.openapi.util.text.StringUtil.unescapeStringCharacters(unquoted)
-                val pattern = if (value.isNotBlank()) value else method.name
+    private fun addAnnotatedDefinition(
+        method: PsiMethod,
+        annotation: PsiAnnotation,
+        legacy: Boolean,
+        into: MutableList<StepDefinition>
+    ) {
+        // Evaluate constants and concatenations such as @Given(PREFIX + "text").
+        val value = annotation.findAttributeValue("value") ?: return
+        val pattern = JavaPsiFacade.getInstance(project).constantEvaluationHelper
+            .computeConstantExpression(value) as? String
+        if (pattern.isNullOrBlank()) return
+        val className = method.containingClass?.qualifiedName
+        addDefinition(pattern, legacy, method.navigationElement, className, into)
+    }
 
-                val hasGroups = pattern.contains("(") && pattern.contains(")")
-                val looksLikeRegex = pattern.startsWith("^") || pattern.endsWith("$") ||
-                    pattern.contains("\\") || hasGroups
-
-                val regexText = if (looksLikeRegex) {
-                    var tmp = pattern
-                    if (!tmp.startsWith("^")) tmp = "^$tmp"
-                    if (!tmp.endsWith("$")) tmp += "$"
-                    tmp
-                } else {
-                    // Convert cucumber expressions like {string} into wildcards and escape
-                    val parts = "\\{[^}]+\\}".toRegex().split(pattern)
-                    val escaped = parts.joinToString(".*") { Regex.escape(it) }
-                    val completed = if (!escaped.startsWith("^")) "^$escaped" else escaped
-                    if (!completed.endsWith("$")) "$completed$" else completed
+    private fun collectKotlinLambdaDefinitions(into: MutableList<StepDefinition>) {
+        val scope = GlobalSearchScope.projectScope(project)
+        val searchHelper = PsiSearchHelper.getInstance(project)
+        // File -> whether it uses the legacy, regex-only cucumber.api.java8 API.
+        val candidates = linkedMapOf<KtFile, Boolean>()
+        // Use the word index to only parse Kotlin files that mention a step keyword.
+        for (keyword in KOTLIN_STEP_FUNCTIONS) {
+            searchHelper.processAllFilesWithWord(keyword, scope, { file: PsiFile ->
+                ProgressManager.checkCanceled()
+                if (file is KtFile && file !in candidates) {
+                    java8Api(file)?.let { legacy -> candidates[file] = legacy }
                 }
-                val file = method.containingFile
-                val vf = file.virtualFile ?: continue
-                val line = docManager.getDocument(file)?.getLineNumber(method.textOffset)?.plus(1) ?: 1
-                val className = method.containingClass?.qualifiedName ?: vf.nameWithoutExtension
-                val screen = extractScreenName(value)
-                steps += StepDefinition(
-                    Regex(regexText, RegexOption.IGNORE_CASE),
-                    vf.path,
-                    line,
-                    className,
-                    screen
-                )
-            }
+                true
+            }, true)
         }
 
-        // Kotlin step definitions using cucumber-java8 En API
-        val ktFiles = FilenameIndex.getAllFilesByExt(project, "kt", scope)
-        for (vf in ktFiles) {
-            val ktFile = psiManager.findFile(vf) as? KtFile ?: continue
-            val calls = PsiTreeUtil.collectElementsOfType(ktFile, KtCallExpression::class.java)
-            for (call in calls) {
+        for ((ktFile, legacy) in candidates) {
+            for (call in PsiTreeUtil.collectElementsOfType(ktFile, KtCallExpression::class.java)) {
+                ProgressManager.checkCanceled()
                 val name = call.calleeExpression?.text ?: continue
-                if (name !in listOf("Given", "When", "Then", "And", "But")) continue
-                val arg = call.valueArguments.firstOrNull()?.getArgumentExpression() as? KtStringTemplateExpression ?: continue
-                val raw = arg.text
-                val value = com.intellij.openapi.util.text.StringUtil.unquoteString(raw)
-                val hasGroups = value.contains("(") && value.contains(")")
-                val looksLikeRegex = value.startsWith("^") || value.endsWith("$") ||
-                    value.contains("\\") || hasGroups
-                val regexText = if (looksLikeRegex) {
-                    var tmp = value
-                    if (!tmp.startsWith("^")) tmp = "^$tmp"
-                    if (!tmp.endsWith("$")) tmp += "$"
-                    tmp
-                } else {
-                    val parts = "\\{[^}]+\\}".toRegex().split(value)
-                    val escaped = parts.joinToString(".*") { Regex.escape(it) }
-                    val completed = if (!escaped.startsWith("^")) "^$escaped" else escaped
-                    if (!completed.endsWith("$")) "$completed$" else completed
-                }
-                val line = docManager.getDocument(ktFile)?.getLineNumber(call.textOffset)?.plus(1) ?: 1
-                val className = ktFile.name.substringBeforeLast(".")
-                val screen = extractScreenName(value)
-                steps += StepDefinition(
-                    Regex(regexText, RegexOption.IGNORE_CASE),
-                    vf.path,
-                    line,
-                    className,
-                    screen
-                )
+                if (name !in KOTLIN_STEP_FUNCTIONS) continue
+                val argument = call.valueArguments.firstOrNull()?.getArgumentExpression() as? KtStringTemplateExpression
+                    ?: continue
+                val pattern = literalValue(argument) ?: continue
+                val className = ktFile.packageFqName.asString()
+                    .let { pkg -> if (pkg.isEmpty()) "" else "$pkg." } + ktFile.name.substringBeforeLast('.')
+                addDefinition(pattern, legacy = legacy, element = call, className = className, into = into)
             }
+        }
+    }
+
+    /**
+     * Returns `false` if the file imports the cucumber-java8 API, `true` if it imports the legacy
+     * `cucumber.api.java8` API, or `null` if it imports neither (e.g. Kotest's `Given` blocks).
+     */
+    private fun java8Api(file: KtFile): Boolean? {
+        val imports = file.importDirectives.mapNotNull { it.importedFqName?.asString() }
+        return when {
+            imports.any { it.startsWith("io.cucumber.java8") } -> false
+            imports.any { it.startsWith("cucumber.api.java8") } -> true
+            else -> null
+        }
+    }
+
+    /** Returns the value of a Kotlin string literal, or `null` if it interpolates values. */
+    private fun literalValue(template: KtStringTemplateExpression): String? {
+        val builder = StringBuilder()
+        for (entry in template.entries) {
+            when (entry) {
+                is KtLiteralStringTemplateEntry -> builder.append(entry.text)
+                is KtEscapeStringTemplateEntry -> builder.append(entry.unescapedValue)
+                else -> return null
             }
-            
-            // Cache the results for future use
-            cachedDefinitions = steps
-            return steps
-        } catch (e: IndexNotReadyException) {
-            // Indices are not ready, return empty list
-            return emptyList()
+        }
+        return builder.toString()
+    }
+
+    private fun addDefinition(
+        pattern: String,
+        legacy: Boolean,
+        element: PsiElement,
+        className: String?,
+        into: MutableList<StepDefinition>
+    ) {
+        try {
+            val regex = StepPatternCompiler.compile(pattern, forceRegex = legacy)
+            if (regex == null) {
+                LOG.info("Skipping step definition with invalid pattern: $pattern")
+                return
+            }
+            val file = element.containingFile ?: return
+            val vf = file.virtualFile ?: file.originalFile.virtualFile ?: return
+            val document = PsiDocumentManager.getInstance(project).getDocument(file)
+            val offset = element.textOffset
+            val line = if (document != null && offset in 0..document.textLength) document.getLineNumber(offset) + 1 else 1
+            into += StepDefinition(
+                expression = pattern,
+                regex = regex,
+                fileUrl = vf.url,
+                filePath = vf.path,
+                lineNumber = line,
+                className = className ?: vf.nameWithoutExtension,
+                screenName = StepMatcher.extractScreenName(pattern)
+            )
         } catch (e: Exception) {
-            // Handle other exceptions gracefully
-            return emptyList()
+            if (e is ControlFlowException) throw e
+            LOG.warn("Failed to read step definition: $pattern", e)
         }
     }
 
-    /**
-     * Returns a list of regex patterns representing all step definitions in the project.
-     */
-    fun getStepPatterns(): List<Regex> = getStepDefinitions().map { it.regex }
+    companion object {
+        private val LOG = logger<StepSearchService>()
 
-    fun findSteps(
-        query: String,
-        classFilter: Set<String>? = null,
-        screenFilter: String? = null
-    ): List<StepResult> {
-        val steps = getStepDefinitions()
-        val results = steps
-            .filter { classFilter == null || it.className in classFilter }
-            .filter { screenFilter == null || it.screenName == screenFilter }
-            .map { StepResult(displayPattern(it.regex), it.filePath, it.lineNumber) }
+        private const val LEGACY_PACKAGE = "cucumber.api."
 
-        if (query.isBlank()) {
-            return results.sortedBy { it.text }
+        private val STEP_META_ANNOTATIONS = mapOf(
+            "io.cucumber.java.StepDefinitionAnnotation" to false,
+            "cucumber.runtime.java.StepDefAnnotation" to true,
+        )
+
+        private val ENGLISH_ANNOTATIONS = listOf("Given", "When", "Then", "And", "But").flatMap {
+            listOf("io.cucumber.java.en.$it", "cucumber.api.java.en.$it")
         }
 
-        return results
-            .map { it to matchScore(it.text, query) }
-            .filter { it.second != Int.MIN_VALUE }
-            .sortedWith(compareByDescending<Pair<StepResult, Int>> { it.second }.thenBy { it.first.text })
-            .map { it.first }
+        private val KOTLIN_STEP_FUNCTIONS = setOf("Given", "When", "Then", "And", "But")
+
+        fun getInstance(project: Project): StepSearchService = project.service()
     }
-
-    private fun tokenize(query: String): List<String> {
-        val trimmed = query.trim().lowercase()
-        if (trimmed.isEmpty()) return emptyList()
-
-        val split = trimmed.split("\\s+".toRegex()).flatMap {
-            it.split("(?<=[a-z])(?=[A-Z])".toRegex())
-        }.filter { it.isNotBlank() }
-
-        if (split.size == 1 && split[0].startsWith("user") && split[0].length > 4) {
-            return listOf("user", split[0].substring(4))
-        }
-
-        return split
-    }
-
-    private fun tokensPresent(text: String, tokens: List<String>): Boolean {
-        if (tokens.isEmpty()) return true
-        val words = text.lowercase().split("[^a-z0-9]+".toRegex())
-        return tokens.all { token -> words.any { it.contains(token) } }
-    }
-
-    private fun matchesQuery(text: String, query: String): Boolean {
-        return matchScore(text, query) != Int.MIN_VALUE
-    }
-
-    private fun matchScore(text: String, query: String): Int {
-        if (query.isBlank()) return 0
-
-        val tokens = tokenize(query)
-        if (!tokensPresent(text, tokens)) return Int.MIN_VALUE
-
-        val lowerText = text.lowercase()
-        val lowerQuery = query.lowercase()
-
-        val directIndex = lowerText.indexOf(lowerQuery)
-        if (directIndex != -1) return 300 - directIndex
-
-        val cleanText = lowerText.replace("[^a-z0-9]".toRegex(), "")
-        val cleanQuery = lowerQuery.replace("[^a-z0-9]".toRegex(), "")
-
-        val cleanIndex = cleanText.indexOf(cleanQuery)
-        if (cleanIndex != -1) return 200 - cleanIndex
-
-        val subseqGap = subsequenceGap(cleanText, cleanQuery)
-        if (subseqGap != null && subseqGap <= cleanQuery.length) {
-            return 100 - subseqGap
-        }
-
-        return Int.MIN_VALUE
-    }
-
-    private fun subsequenceGap(text: String, query: String): Int? {
-        var i = 0
-        var first = -1
-        for ((index, c) in text.withIndex()) {
-            if (i < query.length && c == query[i]) {
-                if (first == -1) first = index
-                i++
-                if (i == query.length) {
-                    val window = index - first + 1
-                    return window - query.length
-                }
-            }
-        }
-        return null
-    }
-
-    fun getStepClasses(): Map<String, Int> {
-        return getStepDefinitions().groupingBy { it.className }.eachCount()
-    }
-
-    fun getScreenNames(): Map<String, Int> {
-        return getStepDefinitions()
-            .filter { it.screenName.isNotBlank() }
-            .groupingBy { it.screenName }
-            .eachCount()
-    }
-
-    private fun displayPattern(regex: Regex): String {
-        var pattern = regex.pattern
-
-        // remove anchors that were added when constructing the Regex
-        pattern = pattern.removePrefix("^").removeSuffix("$")
-
-        // Step definitions originating from cucumber expressions are escaped
-        // using `Pattern.quote` which inserts `\Q` and `\E` around each literal
-        // segment and joins them with `.*`. To present a user-friendly text we
-        // strip these markers and replace the wildcards with a `{string}` placeholder.
-        if (pattern.contains("\\Q") || pattern.contains("\\E")) {
-            pattern = pattern.replace("\\Q", "").replace("\\E", "")
-            pattern = pattern.replace(".*", "{string}")
-        }
-
-        return pattern
-    }
-
-    /**
-     * Returns true if a step definition exists that matches the given [stepText].
-     * This does a simple conversion of cucumber expressions like `{string}` into
-     * wildcard patterns so parameterised steps can be matched.
-     */
-    fun hasStepDefinition(stepText: String): Boolean {
-        val patterns = getStepPatterns()
-        return patterns.any { it.matches(stepText.trim()) }
-    }
-
-    /**
-     * Returns the total number of step definitions in the project.
-     */
-    fun countStepDefinitions(): Int = getStepPatterns().size
 }

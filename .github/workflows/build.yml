@@ -6,16 +6,44 @@ on:
   pull_request:
     branches: ["main"]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '21'
-          cache: gradle
-      - name: Build with Gradle
-        run: ./gradlew build --no-daemon
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+      - name: Build and test
+        run: ./gradlew build
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: build/reports/tests
+
+  verify:
+    # Runs the IntelliJ Plugin Verifier against the IDEs configured in build.gradle.kts.
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space for IDE downloads
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+      - uses: actions/checkout@v7
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+      - name: Verify plugin
+        run: ./gradlew verifyPlugin
