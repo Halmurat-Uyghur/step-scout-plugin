@@ -43,7 +43,10 @@ class MissingStepService(private val project: Project) {
 
         // Many steps repeat across features; match each distinct text only once.
         val matchCache = HashMap<String, Boolean>()
-        fun isDefined(text: String) = matchCache.getOrPut(text) { patterns.any { it.matches(text) } }
+        fun isDefined(text: String) = matchCache.getOrPut(text) {
+            val input = CancellableCharSequence(text)
+            patterns.any { it.matches(input) }
+        }
 
         val missing = mutableListOf<MissingStep>()
         var scenarioCount = 0
@@ -88,6 +91,26 @@ class MissingStepService(private val project: Project) {
 
     private fun substitute(stepText: String, row: Map<String, String>): String =
         PLACEHOLDER.replace(stepText) { match -> row[match.groupValues[1]] ?: match.value }
+
+    /**
+     * Lets a pathological user-written regex (e.g. `^(a+)+$`) be interrupted: regex matching never
+     * checks for cancellation itself, so a runaway match would otherwise block write actions.
+     */
+    private class CancellableCharSequence(private val text: CharSequence) : CharSequence {
+        private var reads = 0
+
+        override val length: Int get() = text.length
+
+        override fun get(index: Int): Char {
+            if (++reads and 0xFFF == 0) ProgressManager.checkCanceled()
+            return text[index]
+        }
+
+        override fun subSequence(startIndex: Int, endIndex: Int): CharSequence =
+            CancellableCharSequence(text.subSequence(startIndex, endIndex))
+
+        override fun toString(): String = text.toString()
+    }
 
     companion object {
         private val PLACEHOLDER = Regex("<([^<>]+)>")

@@ -1,7 +1,9 @@
 package com.stepscout.services
 
 import com.intellij.openapi.application.runReadActionBlocking
+import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.projectRoots.JavaSdk
+import com.intellij.psi.PsiDocumentManager
 import com.intellij.testFramework.LightProjectDescriptor
 import com.intellij.testFramework.fixtures.DefaultLightProjectDescriptor
 import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase
@@ -66,6 +68,17 @@ class StepScoutPlatformTest : LightJavaCodeInsightFixtureTestCase() {
             }
             """.trimIndent()
         )
+        myFixture.addFileToProject(
+            "steps/AnnotatedKotlinSteps.kt",
+            """
+            package steps
+            import io.cucumber.java.en.Then
+            class AnnotatedKotlinSteps {
+                @Then("I see {int} results")
+                fun results(n: Int) {}
+            }
+            """.trimIndent()
+        )
     }
 
     private fun definitions() = runReadActionBlocking { StepSearchService.getInstance(project).getStepDefinitions() }
@@ -79,6 +92,31 @@ class StepScoutPlatformTest : LightJavaCodeInsightFixtureTestCase() {
         assertTrue("localized annotations are found", expressions.contains("un utilisateur"))
         assertTrue("Kotlin escapes are unescaped", expressions.contains("^I wait (\\d+) seconds$"))
         assertTrue(expressions.contains("I say {string}"))
+        assertTrue("annotated Kotlin functions are found", expressions.contains("I see {int} results"))
+    }
+
+    fun testDefinitionsCacheSeesNewAndEditedStepFiles() {
+        assertFalse(definitions().any { it.expression == "a brand new step" })
+
+        val file = myFixture.addFileToProject(
+            "steps/NewSteps.java",
+            """
+            package steps;
+            import io.cucumber.java.en.Given;
+            public class NewSteps { @Given("a brand new step") public void s() {} }
+            """.trimIndent()
+        )
+        assertTrue("new step file is picked up", definitions().any { it.expression == "a brand new step" })
+
+        myFixture.openFileInEditor(file.virtualFile)
+        val offset = myFixture.editor.document.text.indexOf("brand new")
+        WriteCommandAction.runWriteCommandAction(project) {
+            myFixture.editor.document.replaceString(offset, offset + "brand new".length, "renamed")
+        }
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+        val expressions = definitions().map { it.expression }
+        assertTrue("edited step is picked up", "a renamed step" in expressions)
+        assertFalse("a brand new step" in expressions)
     }
 
     fun testScreenNamesAndClasses() {

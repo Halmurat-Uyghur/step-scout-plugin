@@ -7,6 +7,9 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
+import com.intellij.lang.java.JavaLanguage
+import com.intellij.openapi.roots.ProjectRootModificationTracker
+import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiDocumentManager
@@ -23,6 +26,7 @@ import com.intellij.psi.util.PsiModificationTracker
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.util.Processor
 import com.stepscout.settings.StepScoutSettings
+import org.jetbrains.kotlin.idea.KotlinLanguage
 import org.jetbrains.kotlin.psi.KtCallExpression
 import org.jetbrains.kotlin.psi.KtEscapeStringTemplateEntry
 import org.jetbrains.kotlin.psi.KtFile
@@ -38,12 +42,33 @@ import org.jetbrains.kotlin.psi.KtStringTemplateExpression
 @Service(Service.Level.PROJECT)
 class StepSearchService(private val project: Project) {
 
+    /**
+     * Step definitions only live in Java and Kotlin, so edits to feature files or other languages
+     * do not invalidate them. File creation/deletion, library changes and exclusion settings do.
+     */
     private val definitionsCache: CachedValue<List<StepDefinition>> =
         CachedValuesManager.getManager(project).createCachedValue {
             CachedValueProvider.Result.create(
                 computeStepDefinitions(),
-                PsiModificationTracker.MODIFICATION_COUNT,
+                PsiModificationTracker.getInstance(project).forLanguages { language ->
+                    language.isKindOf(JavaLanguage.INSTANCE) || language.isKindOf(KotlinLanguage.INSTANCE)
+                },
+                VirtualFileManager.VFS_STRUCTURE_MODIFICATIONS,
+                ProjectRootModificationTracker.getInstance(project),
                 StepScoutSettings.getInstance(project).modificationTracker
+            )
+        }
+
+    /**
+     * Step annotation classes (one per keyword and Gherkin language, ~350 in cucumber-java) come
+     * from libraries, so they only need to be searched again when dependencies or files change.
+     */
+    private val annotationClassesCache: CachedValue<Map<String, Boolean>> =
+        CachedValuesManager.getManager(project).createCachedValue {
+            CachedValueProvider.Result.create(
+                findStepAnnotationClasses(),
+                VirtualFileManager.VFS_STRUCTURE_MODIFICATIONS,
+                ProjectRootModificationTracker.getInstance(project)
             )
         }
 
@@ -80,7 +105,7 @@ class StepSearchService(private val project: Project) {
         val scope = GlobalSearchScope.allScope(project)
         val facade = JavaPsiFacade.getInstance(project)
 
-        for ((annotationFqn, legacy) in findStepAnnotationClasses(facade, scope)) {
+        for ((annotationFqn, legacy) in annotationClassesCache.value) {
             val annotationClass = facade.findClass(annotationFqn, scope) ?: continue
             // Stream results through a Processor rather than collecting them all first.
             AnnotatedElementsSearch.searchPsiMethods(annotationClass, scope).forEach(Processor { method ->
@@ -98,7 +123,9 @@ class StepSearchService(private val project: Project) {
      * Returns the fully-qualified names of all step annotations (every Gherkin language), mapped to
      * whether they belong to the legacy `cucumber.api` package, which only supports regular expressions.
      */
-    private fun findStepAnnotationClasses(facade: JavaPsiFacade, scope: GlobalSearchScope): Map<String, Boolean> {
+    private fun findStepAnnotationClasses(): Map<String, Boolean> {
+        val scope = GlobalSearchScope.allScope(project)
+        val facade = JavaPsiFacade.getInstance(project)
         val result = linkedMapOf<String, Boolean>()
         for ((metaAnnotation, legacy) in STEP_META_ANNOTATIONS) {
             val meta = facade.findClass(metaAnnotation, scope) ?: continue
