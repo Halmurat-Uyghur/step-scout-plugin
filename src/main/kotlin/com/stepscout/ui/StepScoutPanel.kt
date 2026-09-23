@@ -9,6 +9,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.IconLoader
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.openapi.vfs.newvfs.BulkFileListener
+import com.intellij.openapi.vfs.newvfs.events.VFileCreateEvent
 import com.intellij.openapi.vfs.newvfs.events.VFileEvent
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.ui.DocumentAdapter
@@ -97,7 +98,7 @@ internal class StepScoutPanel(private val project: Project, private val toolWind
         val connection = project.messageBus.connect(disposable)
         connection.subscribe(VirtualFileManager.VFS_CHANGES, object : BulkFileListener {
             override fun after(events: List<VFileEvent>) {
-                if (events.any { isRelevant(it.path) }) scheduleRefresh()
+                if (events.any(::isRelevant)) scheduleRefresh()
             }
         })
         connection.subscribe(DumbService.DUMB_MODE, object : DumbService.DumbModeListener {
@@ -109,8 +110,17 @@ internal class StepScoutPanel(private val project: Project, private val toolWind
         refresh()
     }
 
-    private fun isRelevant(path: String): Boolean =
-        RELEVANT_EXTENSIONS.any { path.endsWith(it, ignoreCase = true) }
+    /**
+     * A change is relevant if it touches a feature or source file, or a directory: deleting,
+     * moving or checking out a folder produces a single directory event for everything inside it.
+     */
+    private fun isRelevant(event: VFileEvent): Boolean {
+        val isDirectory = (event as? VFileCreateEvent)?.isDirectory ?: event.file?.isDirectory ?: false
+        if (isDirectory) return true
+        // For renames, the path is the old name and the file carries the new one.
+        val names = listOfNotNull(event.path, event.file?.name)
+        return names.any { name -> RELEVANT_EXTENSIONS.any { name.endsWith(it, ignoreCase = true) } }
+    }
 
     /** Debounces bursts of file events (e.g. VCS updates) into a single refresh. */
     private fun scheduleRefresh() {
@@ -135,7 +145,7 @@ internal class StepScoutPanel(private val project: Project, private val toolWind
             .inSmartMode(project)
             .expireWith(disposable)
             .coalesceBy(refreshKey)
-            .finishOnUiThread(ModalityState.any(), ::applyStats)
+            .finishOnUiThread(ModalityState.stateForComponent(component), ::applyStats)
             .submit(AppExecutorUtil.getAppExecutorService())
     }
 
@@ -199,7 +209,7 @@ internal class StepScoutPanel(private val project: Project, private val toolWind
             .inSmartMode(project)
             .expireWith(disposable)
             .coalesceBy(searchKey)
-            .finishOnUiThread(ModalityState.any()) { data ->
+            .finishOnUiThread(ModalityState.stateForComponent(component)) { data ->
                 stepResults = data.results
                 resultListModel.clear()
                 resultListModel.addAll(data.results.map { it.text })
