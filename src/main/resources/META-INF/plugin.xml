@@ -40,12 +40,12 @@
 
         <h3>Settings</h3>
         <ul>
-          <li><b>Exclusions:</b> Settings/Preferences → Tools → StepScout → “Exclude paths” (one per line) to skip directories from scans.</li>
+          <li><b>Exclusions:</b> Settings/Preferences → Tools → StepScout → “Exclude paths” (one per line) to skip matching feature files and step definitions.</li>
         </ul>
 
         <h3>Compatibility</h3>
         <ul>
-          <li><b>IDEs:</b> IntelliJ IDEA 2024.1–2025.1 (Community & Ultimate).</li>
+          <li><b>IDEs:</b> IntelliJ IDEA 2025.2 and newer, including the unified IntelliJ IDEA 2025.3+ distribution.</li>
           <li><b>Plugins:</b> requires Gherkin and Cucumber for Java (declared as dependencies).</li>
           <li><b>UI:</b> optimized for the new UI; works with classic UI as well.</li>
         </ul>
@@ -66,9 +66,8 @@
     <depends>gherkin</depends>
     <depends>cucumber-java</depends>
     <depends>org.jetbrains.kotlin</depends>
-    
-    <!-- IntelliJ Platform version compatibility -->
-    <idea-version since-build="241.0" until-build="252.*"/>
+
+    <!-- since/until-build are set by Gradle (intellijPlatform.pluginConfiguration.ideaVersion) -->
 
     <!-- UI integration -->
     <extensions defaultExtensionNs="com.intellij">
