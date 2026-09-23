@@ -78,7 +78,10 @@
                     factoryClass="com.stepscout.ui.StepScoutToolWindowFactory"
                     icon="/icons/pluginIconSmall.svg"
                     doNotActivateOnStart="false"/>
-        <projectConfigurable instance="com.stepscout.settings.StepScoutConfigurable" displayName="StepScout"/>
+        <projectConfigurable id="com.stepscout.settings"
+                             parentId="tools"
+                             instance="com.stepscout.settings.StepScoutConfigurable"
+                             displayName="StepScout"/>
     </extensions>
 
     <!-- Kotlin plugin compatibility -->

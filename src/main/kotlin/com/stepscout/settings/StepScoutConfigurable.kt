@@ -14,31 +14,29 @@ class StepScoutConfigurable(private val project: Project) : Configurable {
     private val textarea = JTextArea(5, 40)
 
     override fun createComponent(): JComponent {
-        if (component == null) {
-            val panel = JPanel()
-            panel.layout = BoxLayout(panel, BoxLayout.Y_AXIS)
-            panel.add(JLabel("Exclude paths (one per line):"))
-            panel.add(JBScrollPane(textarea))
-            component = panel
+        return component ?: JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            add(JLabel("Exclude paths (one per line):"))
+            add(JBScrollPane(textarea))
+            component = this
         }
-        return component!!
     }
 
-    override fun isModified(): Boolean {
-        val settings = StepScoutSettings.getInstance(project)
-        val joined = settings.excludePaths.joinToString("\n")
-        return textarea.text.trimEnd() != joined
-    }
+    private fun enteredPaths(): List<String> = textarea.text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+
+    override fun isModified(): Boolean = enteredPaths() != StepScoutSettings.getInstance(project).excludePaths
 
     override fun apply() {
-        val settings = StepScoutSettings.getInstance(project)
-        val lines = textarea.text.lines().map { it.trim() }.filter { it.isNotEmpty() }
-        settings.excludePaths = lines.toMutableList()
+        StepScoutSettings.getInstance(project).excludePaths = enteredPaths().toMutableList()
+        project.messageBus.syncPublisher(StepScoutSettingsListener.TOPIC).settingsChanged()
     }
 
     override fun reset() {
-        val settings = StepScoutSettings.getInstance(project)
-        textarea.text = settings.excludePaths.joinToString("\n")
+        textarea.text = StepScoutSettings.getInstance(project).excludePaths.joinToString("\n")
+    }
+
+    override fun disposeUIResources() {
+        component = null
     }
 
     override fun getDisplayName(): String = "StepScout"
