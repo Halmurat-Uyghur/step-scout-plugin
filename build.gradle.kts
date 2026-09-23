@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.stepscout"
-version = "1.2.0"
+version = "1.3.0"
 
 repositories {
     mavenCentral()
@@ -69,15 +69,11 @@ intellijPlatform {
         }
         changeNotes = """
             <ul>
-              <li><b>Compatibility:</b> IntelliJ IDEA 2025.2 through 2026.2 and later.</li>
-              <li><b>Fixed:</b> a single step using optional text such as <code>cucumber(s)</code> no longer hides every step definition.</li>
-              <li><b>Fixed:</b> Cucumber expressions now match like Cucumber: typed parameters, optional text, alternation and escapes; <code>/regex/</code> patterns are supported.</li>
-              <li><b>Fixed:</b> Scenario Outline steps are checked against their Examples values instead of being reported missing.</li>
-              <li><b>Fixed:</b> Kotlin regex step definitions, constant annotation values and non-English step annotations are recognised.</li>
-              <li><b>Fixed:</b> Background blocks are no longer counted as scenarios; filters survive refreshes; library steps can be opened.</li>
-              <li><b>Fixed:</b> searching for text with punctuation such as <code>log-in</code> or <code>{int}</code> now finds steps.</li>
-              <li><b>Performance:</b> cached, cancellable background scans that no longer block typing or rescan on unrelated file changes.</li>
-              <li><b>Changed:</b> the tool window no longer opens automatically in every project; settings moved to Tools &gt; StepScout.</li>
+              <li><b>Fixed:</b> the StepScout tool window stayed empty when a project was opened (1.2.0 regression).</li>
+              <li><b>New:</b> right-click a <code>.feature</code> file and choose <i>Exclude from StepScout</i> to add it to the excluded paths.</li>
+              <li><b>New:</b> Refresh and Settings icons in the tool window toolbar; a reset-filters icon replaces the Clear All button.</li>
+              <li><b>Changed:</b> stats fit on one line, the split pane uses a thin divider and search waits for a pause in typing.</li>
+              <li><b>Changed:</b> the exclude paths text area fills the settings page.</li>
             </ul>
         """.trimIndent()
     }

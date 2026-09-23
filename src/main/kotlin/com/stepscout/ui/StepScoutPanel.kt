@@ -183,8 +183,9 @@ internal class StepScoutPanel(private val project: Project, private val toolWind
         displayToFull = mapping
         screenKeys = screenData.keys.sorted()
 
-        if (selectedClass !in counts) selectedClass = null
-        if (selectedScreen !in screenData) selectedScreen = null
+        // TreeMap.containsKey(null) throws, so only look up a non-null selection.
+        selectedClass = selectedClass?.takeIf { it in counts }
+        selectedScreen = selectedScreen?.takeIf { it in screenData }
 
         updatingFilters = true
         try {
@@ -297,6 +298,7 @@ internal class StepScoutPanel(private val project: Project, private val toolWind
     private fun buildLayout(): JComponent {
         val clearButton = JButton(AllIcons.Actions.Rollback).apply {
             toolTipText = "Reset all filters"
+            accessibleContext.accessibleName = "Reset all filters"
             isBorderPainted = false
             isContentAreaFilled = false
             isFocusPainted = false
